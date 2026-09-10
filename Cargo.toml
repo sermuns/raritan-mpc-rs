@@ -1,0 +1,9 @@
+[package]
+name = "raritan-mpc-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+const_format = "0.2"
+eyre = "0.6"
+openssl = "0.10"
