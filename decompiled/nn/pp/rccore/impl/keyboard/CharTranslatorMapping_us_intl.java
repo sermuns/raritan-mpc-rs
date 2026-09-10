@@ -1,0 +1,157 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package nn.pp.rccore.impl.keyboard;
+
+import nn.pp.core.kbd.EricVKConstants;
+import nn.pp.rccore.impl.keyboard.CharTranslatorConstants;
+import nn.pp.rccore.impl.keyboard.CharTranslatorMappingBase;
+
+public class CharTranslatorMapping_us_intl
+extends CharTranslatorMappingBase
+implements CharTranslatorConstants,
+EricVKConstants {
+    @Override
+    public void addMappings() {
+        super.addMappings();
+        this.addMapping('^', new int[]{131072, 0x100000, 54, 65590, 32, 65568});
+        this.addMapping('\u00a1', new int[]{262144, 524288, 49, 65585});
+        this.addMapping('\u00b2', new int[]{262144, 524288, 50, 65586});
+        this.addMapping('\u00b3', new int[]{262144, 524288, 51, 65587});
+        this.addMapping('\u00a4', new int[]{262144, 524288, 52, 65588});
+        this.addMapping('\u20ac', new int[]{262144, 524288, 53, 65589});
+        this.addMapping('\u00bc', new int[]{262144, 524288, 54, 65590});
+        this.addMapping('\u00bd', new int[]{262144, 524288, 55, 65591});
+        this.addMapping('\u00be', new int[]{262144, 524288, 56, 65592});
+        this.addMapping('\u2018', new int[]{262144, 524288, 57, 65593});
+        this.addMapping('\u2019', new int[]{262144, 524288, 48, 65584});
+        this.addMapping('\u00b9', new int[]{131072, 524288, 49, 65585});
+        this.addMapping('\u00a3', new int[]{131072, 524288, 52, 65588});
+        this.addMapping('\u00e4', new int[]{524288, 81, 65617});
+        this.addMapping('\u00c4', new int[]{524288, 81, 65617});
+        this.addMapping('\u00e5', new int[]{524288, 87, 65623});
+        this.addMapping('\u00c5', new int[]{524288, 87, 65623});
+        this.addMapping('\u00e9', new int[]{524288, 69, 65605});
+        this.addMapping('\u00c9', new int[]{524288, 69, 65605});
+        this.addMapping('\u00ae', new int[]{262144, 524288, 82, 65618});
+        this.addMapping('\u00fe', new int[]{524288, 84, 65620});
+        this.addMapping('\u00de', new int[]{524288, 84, 65620});
+        this.addMapping('\u00fc', new int[]{524288, 89, 65625});
+        this.addMapping('\u00dc', new int[]{524288, 89, 65625});
+        this.addMapping('\u00fa', new int[]{524288, 85, 65621});
+        this.addMapping('\u00da', new int[]{524288, 85, 65621});
+        this.addMapping('\u00ed', new int[]{524288, 73, 65609});
+        this.addMapping('\u00cd', new int[]{524288, 73, 65609});
+        this.addMapping('\u00f3', new int[]{524288, 79, 65615});
+        this.addMapping('\u00d3', new int[]{524288, 79, 65615});
+        this.addMapping('\u00f6', new int[]{524288, 80, 65616});
+        this.addMapping('\u00d6', new int[]{524288, 80, 65616});
+        this.addMapping('\u00e1', new int[]{524288, 65, 65601});
+        this.addMapping('\u00c1', new int[]{524288, 65, 65601});
+        this.addMapping('\u00df', new int[]{262144, 524288, 83, 65619});
+        this.addMapping('\u00a7', new int[]{131072, 524288, 83, 65619});
+        this.addMapping('\u00f0', new int[]{524288, 68, 65604});
+        this.addMapping('\u00d0', new int[]{524288, 68, 65604});
+        this.addMapping('\u00f8', new int[]{524288, 76, 65612});
+        this.addMapping('\u00d8', new int[]{524288, 76, 65612});
+        this.addMapping('\u00e6', new int[]{524288, 90, 65626});
+        this.addMapping('\u00c6', new int[]{524288, 90, 65626});
+        this.addMapping('\u00a9', new int[]{262144, 524288, 67, 65603});
+        this.addMapping('\u00a2', new int[]{131072, 524288, 67, 65603});
+        this.addMapping('\u00f1', new int[]{524288, 78, 65614});
+        this.addMapping('\u00d1', new int[]{524288, 78, 65614});
+        this.addMapping('\u00b5', new int[]{262144, 524288, 77, 65613});
+        this.addMapping('~', new int[]{131072, 0x100000, 192, 65728, 32, 65568});
+        this.addMapping('\'', new int[]{262144, 0x100000, 222, 65758, 32, 65568});
+        this.addMapping('`', new int[]{262144, 0x100000, 192, 65728, 32, 65568});
+        this.addMapping('\"', new int[]{131072, 0x100000, 222, 65758, 32, 65568});
+        this.addMapping('\u00a5', new int[]{262144, 524288, 45, 65581});
+        this.addMapping('\u00d7', new int[]{262144, 524288, 61, 65597});
+        this.addMapping('\u00ab', new int[]{262144, 524288, 91, 65627});
+        this.addMapping('\u00bb', new int[]{262144, 524288, 93, 65629});
+        this.addMapping('\u00ac', new int[]{262144, 524288, 92, 65628});
+        this.addMapping('\u00b6', new int[]{262144, 524288, 59, 65595});
+        this.addMapping('\u00b4', new int[]{262144, 524288, 222, 65758});
+        this.addMapping('\u00e7', new int[]{524288, 44, 65580});
+        this.addMapping('\u00bf', new int[]{262144, 524288, 47, 65583});
+        this.addMapping('\u00f7', new int[]{131072, 524288, 61, 65597});
+        this.addMapping('\u00a6', new int[]{131072, 524288, 92, 65628});
+        this.addMapping('\u00b0', new int[]{131072, 524288, 59, 65595});
+        this.addMapping('\u00a8', new int[]{131072, 524288, 222, 65758});
+        this.addMapping('\u00c7', new int[]{524288, 44, 65580});
+        this.addMapping('\u00e0', new int[]{262144, 192, 65728, 0x1E0000, 65, 65601});
+        this.addMapping('\u00c0', new int[]{262144, 192, 65728, 0x1E0000, 65, 65601});
+        this.addMapping('\u00e2', new int[]{131072, 54, 65590, 0x1E0000, 65, 65601});
+        this.addMapping('\u00c2', new int[]{131072, 54, 65590, 0x1E0000, 65, 65601});
+        this.addMapping('\u00e3', new int[]{131072, 192, 65728, 0x1E0000, 65, 65601});
+        this.addMapping('\u00c3', new int[]{131072, 192, 65728, 0x1E0000, 65, 65601});
+        this.addMapping('\u00e8', new int[]{262144, 192, 65728, 0x1E0000, 69, 65605});
+        this.addMapping('\u00c8', new int[]{262144, 192, 65728, 0x1E0000, 69, 65605});
+        this.addMapping('\u00ea', new int[]{131072, 54, 65590, 0x1E0000, 69, 65605});
+        this.addMapping('\u00ca', new int[]{131072, 54, 65590, 0x1E0000, 69, 65605});
+        this.addMapping('\u00eb', new int[]{131072, 222, 65758, 0x1E0000, 69, 65605});
+        this.addMapping('\u00cb', new int[]{131072, 222, 65758, 0x1E0000, 69, 65605});
+        this.addMapping('\u00ff', new int[]{131072, 222, 65758, 0x1E0000, 89, 65625});
+        this.addMapping('\u00fd', new int[]{222, 65758, 89, 65625});
+        this.addMapping('\u00dd', new int[]{222, 65758, 131072, 89, 65625});
+        this.addMapping('\u00f9', new int[]{262144, 192, 65728, 0x1E0000, 85, 65621});
+        this.addMapping('\u00d9', new int[]{262144, 192, 65728, 0x1E0000, 85, 65621});
+        this.addMapping('\u00fb', new int[]{131072, 54, 65590, 0x1E0000, 85, 65621});
+        this.addMapping('\u00db', new int[]{131072, 54, 65590, 0x1E0000, 85, 65621});
+        this.addMapping('\u00ec', new int[]{262144, 192, 65728, 0x1E0000, 73, 65609});
+        this.addMapping('\u00cc', new int[]{262144, 192, 65728, 0x1E0000, 73, 65609});
+        this.addMapping('\u00ee', new int[]{131072, 54, 65590, 0x1E0000, 73, 65609});
+        this.addMapping('\u00ce', new int[]{131072, 54, 65590, 0x1E0000, 73, 65609});
+        this.addMapping('\u00ef', new int[]{131072, 222, 65758, 0x1E0000, 73, 65609});
+        this.addMapping('\u00cf', new int[]{131072, 222, 65758, 0x1E0000, 73, 65609});
+        this.addMapping('\u00f2', new int[]{262144, 192, 65728, 0x1E0000, 79, 65615});
+        this.addMapping('\u00d2', new int[]{262144, 192, 65728, 0x1E0000, 79, 65615});
+        this.addMapping('\u00f4', new int[]{131072, 54, 65590, 0x1E0000, 79, 65615});
+        this.addMapping('\u00d4', new int[]{131072, 54, 65590, 0x1E0000, 79, 65615});
+        this.addMapping('\u00f5', new int[]{131072, 192, 65728, 0x1E0000, 79, 65615});
+        this.addMapping('\u00d5', new int[]{131072, 192, 65728, 0x1E0000, 79, 65615});
+        this.addMapping('\u00af', new int[]{131072, 524288, 51, 65587, 32, 65568});
+        this.addMapping('\u0101', new int[]{131072, 524288, 51, 65587, 0x1E0000, 65, 65601});
+        this.addMapping('\u0100', new int[]{131072, 524288, 51, 65587, 0x1E0000, 65, 65601});
+        this.addMapping('\u0113', new int[]{131072, 524288, 51, 65587, 0x1E0000, 69, 65605});
+        this.addMapping('\u0112', new int[]{131072, 524288, 51, 65587, 0x1E0000, 69, 65605});
+        this.addMapping('\u012b', new int[]{131072, 524288, 51, 65587, 0x1E0000, 73, 65609});
+        this.addMapping('\u012a', new int[]{131072, 524288, 51, 65587, 0x1E0000, 73, 65609});
+        this.addMapping('\u014d', new int[]{131072, 524288, 51, 65587, 0x1E0000, 79, 65615});
+        this.addMapping('\u014c', new int[]{131072, 524288, 51, 65587, 0x1E0000, 79, 65615});
+        this.addMapping('\u016b', new int[]{131072, 524288, 51, 65587, 0x1E0000, 85, 65621});
+        this.addMapping('\u016a', new int[]{131072, 524288, 51, 65587, 0x1E0000, 85, 65621});
+        this.addMapping('\u02d8', new int[]{131072, 524288, 57, 65593, 32, 65568});
+        this.addMapping('\u0103', new int[]{131072, 524288, 57, 65593, 0x1E0000, 65, 65601});
+        this.addMapping('\u0102', new int[]{131072, 524288, 57, 65593, 0x1E0000, 65, 65601});
+        this.addMapping('\u0115', new int[]{131072, 524288, 57, 65593, 0x1E0000, 69, 65605});
+        this.addMapping('\u0114', new int[]{131072, 524288, 57, 65593, 0x1E0000, 69, 65605});
+        this.addMapping('\u012d', new int[]{131072, 524288, 57, 65593, 0x1E0000, 73, 65609});
+        this.addMapping('\u012c', new int[]{131072, 524288, 57, 65593, 0x1E0000, 73, 65609});
+        this.addMapping('\u014f', new int[]{131072, 524288, 57, 65593, 0x1E0000, 79, 65615});
+        this.addMapping('\u014e', new int[]{131072, 524288, 57, 65593, 0x1E0000, 79, 65615});
+        this.addMapping('\u016d', new int[]{131072, 524288, 57, 65593, 0x1E0000, 85, 65621});
+        this.addMapping('\u016c', new int[]{131072, 524288, 57, 65593, 0x1E0000, 85, 65621});
+        this.addMapping('\u011f', new int[]{131072, 524288, 57, 65593, 0x1E0000, 71, 65607});
+        this.addMapping('\u011e', new int[]{131072, 524288, 57, 65593, 0x1E0000, 71, 65607});
+        this.addMapping('\u02db', new int[]{131072, 524288, 56, 65592, 56, 65592});
+        this.addMapping('\u0105', new int[]{131072, 524288, 56, 65592, 0x1E0000, 65, 65601});
+        this.addMapping('\u0104', new int[]{131072, 524288, 56, 65592, 0x1E0000, 65, 65601});
+        this.addMapping('\u0119', new int[]{131072, 524288, 56, 65592, 0x1E0000, 69, 65605});
+        this.addMapping('\u0118', new int[]{131072, 524288, 56, 65592, 0x1E0000, 69, 65605});
+        this.addMapping('\u012f', new int[]{131072, 524288, 56, 65592, 0x1E0000, 73, 65609});
+        this.addMapping('\u012e', new int[]{131072, 524288, 56, 65592, 0x1E0000, 73, 65609});
+        this.addMapping('\u0173', new int[]{131072, 524288, 56, 65592, 0x1E0000, 85, 65621});
+        this.addMapping('\u0172', new int[]{131072, 524288, 56, 65592, 0x1E0000, 85, 65621});
+        this.addMapping('\u02dd', new int[]{131072, 524288, 50, 65586, 32, 65568});
+        this.addMapping('\u0151', new int[]{131072, 524288, 50, 65586, 0x1E0000, 79, 65615});
+        this.addMapping('\u0150', new int[]{131072, 524288, 50, 65586, 0x1E0000, 79, 65615});
+        this.addMapping('\u0171', new int[]{131072, 524288, 50, 65586, 0x1E0000, 85, 65621});
+        this.addMapping('\u0170', new int[]{131072, 524288, 50, 65586, 0x1E0000, 85, 65621});
+        this.addMapping('\u00e5', new int[]{524288, 87, 65623});
+        this.addMapping('\u00c5', new int[]{524288, 87, 65623});
+        this.addMapping('\u016f', new int[]{131072, 524288, 48, 65584, 0x1E0000, 85, 65621});
+        this.addMapping('\u016e', new int[]{131072, 524288, 48, 65584, 0x1E0000, 85, 65621});
+    }
+}
+
