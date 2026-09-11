@@ -2,7 +2,7 @@ use eyre::Result;
 use quick_xml::de::from_str;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Port {
     #[serde(rename = "@id")]
@@ -19,6 +19,8 @@ pub struct Port {
     pub stat_available: Option<i32>,
     #[serde(rename = "@Connection", default)]
     pub connection: Option<String>,
+    #[serde(rename = "DeviceID", default)]
+    pub device_id: Option<String>,
     pub name: Option<String>,
 }
 
@@ -68,8 +70,14 @@ pub(crate) struct SessionResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SessionData {
-    #[serde(rename = "SessionID", default)]
+    #[serde(rename = "@SessionID", default)]
     pub session_id: Option<String>,
+    #[serde(rename = "SessionID", default)]
+    pub session_id_element: Option<String>,
+    #[serde(rename = "@SessionKey", default)]
+    pub session_key: Option<String>,
+    #[serde(rename = "SessionKey", default)]
+    pub session_key_element: Option<String>,
 }
 
 #[cfg(test)]

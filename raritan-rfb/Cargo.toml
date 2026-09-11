@@ -4,4 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-eyre = "0.6"
+eyre.workspace = true
+base64.workspace = true
+flate2 = "1"
+openssl.workspace = true
+tracing.workspace = true

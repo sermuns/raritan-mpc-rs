@@ -1,11 +1,25 @@
 use eframe::egui;
 use raritan_rdm::{Port, RdmClient};
+use raritan_rfb::{Framebuffer, RfbStream};
+use std::{
+    sync::mpsc::{self, Receiver},
+    thread,
+};
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
 
 const HOST: &str = "192.168.42.10";
 const USER: &str = "admin";
 const PASSWORD: &str = "admin";
 
 fn main() -> eframe::Result {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("raritan_mpc=debug,raritan_rdm=debug,raritan_rfb=trace")
+        }))
+        .with_target(false)
+        .init();
+    info!("starting Raritan MPC");
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         ..Default::default()
@@ -22,6 +36,18 @@ struct MpcApp {
     ports: Vec<Port>,
     selected_port: Option<usize>,
     error: Option<String>,
+    frames: Option<Receiver<FrameMessage>>,
+    texture: Option<egui::TextureHandle>,
+    framebuffer_size: Option<(u16, u16)>,
+}
+
+enum FrameMessage {
+    Frame {
+        width: u16,
+        height: u16,
+        rgba: Vec<u8>,
+    },
+    Error(String),
 }
 
 impl MpcApp {
@@ -36,18 +62,111 @@ impl MpcApp {
                     .collect(),
                 selected_port: None,
                 error: None,
+                frames: None,
+                texture: None,
+                framebuffer_size: None,
             },
             Err(error) => Self {
                 ports: Vec::new(),
                 selected_port: None,
                 error: Some(format!("{error:?}")),
+                frames: None,
+                texture: None,
+                framebuffer_size: None,
             },
         }
+    }
+
+    fn start_video(&mut self, port: &Port) {
+        let port_id = port.id.clone();
+        let portal = format!("//*[@id={}]", port.id);
+        let target = port.device_id.clone().unwrap_or_else(|| port.id.clone());
+        let target = if target.starts_with("//*[@id=") {
+            target
+        } else {
+            format!("//*[@id={}]", target)
+        };
+        info!(%port_id, %portal, %target, "starting framebuffer worker");
+        let (sender, receiver) = mpsc::channel();
+        self.frames = Some(receiver);
+        self.texture = None;
+        self.framebuffer_size = None;
+        self.error = None;
+        thread::spawn(move || {
+            let result = (|| -> eyre::Result<()> {
+                info!(%port_id, "connecting RDM worker session");
+                let mut rdm = RdmClient::connect(HOST, USER, PASSWORD)?;
+                rdm.enumerate_ports()?;
+                let (session_id, session_key) = rdm.session_credentials()?;
+                let session_id = session_id.to_owned();
+                let session_key = session_key.to_owned();
+                rdm.connect_video_stream(&portal, &target, true)?;
+                info!(%port_id, "connecting RFB worker session");
+                let mut rfb =
+                    RfbStream::connect_raritan_tls(HOST, &session_id, &session_key, &port_id)?;
+                let (width, height) = rfb
+                    .framebuffer_size()
+                    .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
+                let format = raritan_rfb::PixelFormat::RGB565;
+                let mut framebuffer = Framebuffer::new(width, height);
+                loop {
+                    let update = rfb.read_message()?;
+                    info!(
+                        rectangles = update.rectangles.len(),
+                        flags = update.flags,
+                        "decoded framebuffer update"
+                    );
+                    framebuffer.apply_update(&update, format)?;
+                    sender.send(FrameMessage::Frame {
+                        width,
+                        height,
+                        rgba: framebuffer.rgba.clone(),
+                    })?;
+                    rfb.request_framebuffer_update(width, height, true)?;
+                }
+            })();
+            if let Err(error) = result {
+                error!(%error, "framebuffer worker stopped");
+                let _ = sender.send(FrameMessage::Error(format!("{error:?}")));
+            }
+        });
     }
 }
 
 impl eframe::App for MpcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Some(receiver) = &self.frames {
+            while let Ok(message) = receiver.try_recv() {
+                match message {
+                    FrameMessage::Frame {
+                        width,
+                        height,
+                        rgba,
+                    } => {
+                        self.framebuffer_size = Some((width, height));
+                        let image = egui::ColorImage::from_rgba_unmultiplied(
+                            [width as usize, height as usize],
+                            &rgba,
+                        );
+                        if let Some(texture) = &mut self.texture {
+                            texture.set(image, egui::TextureOptions::LINEAR);
+                        } else {
+                            self.texture = Some(ui.ctx().load_texture(
+                                "framebuffer",
+                                image,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                        }
+                    }
+                    FrameMessage::Error(error) => {
+                        warn!(%error, "framebuffer error received by GUI");
+                        self.error = Some(error)
+                    }
+                }
+            }
+        }
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(33));
         ui.heading("Raritan MPC");
         ui.label(HOST);
         ui.separator();
@@ -61,7 +180,8 @@ impl eframe::App for MpcApp {
             ui.set_width(available_width * 0.3);
             ui.vertical(|ui| {
                 ui.heading("KVM ports");
-                for (index, port) in self.ports.iter().enumerate() {
+                for index in 0..self.ports.len() {
+                    let port = &self.ports[index];
                     let label = format!(
                         "{}  {}",
                         port.index
@@ -73,6 +193,8 @@ impl eframe::App for MpcApp {
                         .clicked()
                     {
                         self.selected_port = Some(index);
+                        let selected_port = port.clone();
+                        self.start_video(&selected_port);
                     }
                 }
             });
@@ -83,9 +205,13 @@ impl eframe::App for MpcApp {
                     let port = &self.ports[index];
                     ui.heading(port.name.as_deref().unwrap_or("Selected port"));
                     ui.label(format!("Port ID: {}", port.id));
-                    ui.label("Framebuffer transport is the next connection layer.");
                     ui.separator();
-                    ui.label("No framebuffer connected yet");
+                    if let Some(texture) = &self.texture {
+                        let size = texture.size_vec2();
+                        ui.image((texture.id(), size));
+                    } else {
+                        ui.label("Connecting to framebuffer...");
+                    }
                 } else {
                     ui.heading("Select a KVM port");
                 }
