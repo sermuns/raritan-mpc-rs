@@ -30,7 +30,10 @@ impl MpcApp {
             .and_then(|mut client| client.enumerate_ports())
         {
             Ok(ports) => Self {
-                ports,
+                ports: ports
+                    .into_iter()
+                    .filter(|port| port.status == Some(1))
+                    .collect(),
                 selected_port: None,
                 error: None,
             },
