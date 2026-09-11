@@ -1,0 +1,9 @@
+[package]
+name = "raritan-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6"
+raritan-rdm = { path = "../raritan-rdm" }

@@ -2,7 +2,7 @@ use crate::{
     model::{SessionResponse, parse_ports},
     protocol::{display_xml, escape_xml, read_frame, write_frame},
 };
-use eyre::{Context, OptionExt, Result, bail};
+use eyre::{Context, OptionExt, bail};
 use openssl::ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion};
 use quick_xml::de::from_str;
 use std::net::TcpStream;
@@ -12,7 +12,7 @@ pub struct RdmClient {
 }
 
 impl RdmClient {
-    pub fn connect(host: impl Into<String>, user: &str, password: &str) -> Result<Self> {
+    pub fn connect(host: impl Into<String>, user: &str, password: &str) -> eyre::Result<Self> {
         let host = host.into();
         let mut stream = TcpStream::connect((&*host, 5000))
             .wrap_err_with(|| format!("connecting to {host}:5000"))?;
@@ -46,7 +46,7 @@ impl RdmClient {
         Ok(Self { stream: tls })
     }
 
-    pub fn database_query(&mut self, request: &str) -> Result<String> {
+    pub fn database_query(&mut self, request: &str) -> eyre::Result<String> {
         write_frame(&mut self.stream, request)?;
         let response = read_frame(&mut self.stream)?;
         Ok(String::from_utf8(response)?
@@ -54,7 +54,7 @@ impl RdmClient {
             .to_owned())
     }
 
-    pub fn enumerate_ports(&mut self) -> Result<Vec<crate::Port>> {
+    pub fn enumerate_ports(&mut self) -> eyre::Result<Vec<crate::Port>> {
         let session: SessionResponse =
             from_str(&self.database_query("<Session><GetSessionID/></Session>")?)?;
         session
@@ -86,7 +86,7 @@ impl RdmClient {
     }
 }
 
-fn tls_connector() -> Result<SslConnector> {
+fn tls_connector() -> eyre::Result<SslConnector> {
     let mut builder = SslConnector::builder(SslMethod::tls())?;
     builder.set_cipher_list("DEFAULT:@SECLEVEL=0")?;
     builder.set_min_proto_version(Some(SslVersion::TLS1))?;

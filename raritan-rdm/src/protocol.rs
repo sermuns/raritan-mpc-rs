@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 
 const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
-pub(crate) fn write_frame<W: Write>(stream: &mut W, payload: &str) -> Result<()> {
+pub fn write_frame<W: Write>(stream: &mut W, payload: &str) -> Result<()> {
     let payload = payload.as_bytes();
     let frame_len = payload.len().checked_add(5).ok_or_eyre("frame too large")?;
     let frame_len = u32::try_from(frame_len).map_err(|_| eyre!("frame too large"))?;
@@ -14,7 +14,7 @@ pub(crate) fn write_frame<W: Write>(stream: &mut W, payload: &str) -> Result<()>
     Ok(())
 }
 
-pub(crate) fn read_frame<R: Read>(stream: &mut R) -> Result<Vec<u8>> {
+pub fn read_frame<R: Read>(stream: &mut R) -> Result<Vec<u8>> {
     let mut header = [0; 4];
     stream.read_exact(&mut header)?;
     let frame_len = u32::from_be_bytes(header) as usize;
@@ -29,13 +29,13 @@ pub(crate) fn read_frame<R: Read>(stream: &mut R) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
-pub(crate) fn display_xml(bytes: &[u8]) -> String {
+pub fn display_xml(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .trim_end_matches('\0')
         .to_owned()
 }
 
-pub(crate) fn escape_xml(value: &str) -> String {
+pub fn escape_xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('"', "&quot;")
