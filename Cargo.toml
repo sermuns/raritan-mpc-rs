@@ -7,4 +7,5 @@ edition = "2024"
 const_format = "0.2"
 eyre = "0.6"
 openssl = "0.10"
-quick-xml = "0.37"
+quick-xml = { version = "0.42", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }

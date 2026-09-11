@@ -1,9 +1,7 @@
 use eyre::{Context, OptionExt, bail, eyre};
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
-use quick_xml::{
-    Reader,
-    events::{BytesStart, Event},
-};
+use quick_xml::de::from_str;
+use serde::Deserialize;
 use std::{
     io::{Read, Write},
     net::TcpStream,
@@ -22,10 +20,10 @@ fn main() -> eyre::Result<()> {
             "{:>3} {:<28} {:<12} id={} status={} available={}",
             port.index.unwrap_or(0),
             port.name.as_deref().unwrap_or(""),
-            port.port_type.as_deref().unwrap_or(""),
+            port.r#type.as_deref().unwrap_or(""),
             port.id,
             port.status.unwrap_or(-1),
-            port.available.unwrap_or(-1),
+            port.stat_available.unwrap_or(-1),
         );
     }
 
@@ -63,8 +61,11 @@ fn enumerate_ports(host: &str, user: &str, password: &str) -> eyre::Result<Vec<P
     }
 
     let session = database_query(&mut tls, "<Session><GetSessionID/></Session>")?;
-    let session_id =
-        xml_text(&session, "SessionID")?.ok_or_eyre("response did not contain SessionID")?;
+    let session: SessionResponse = from_str(&session)?;
+    let session_id = session
+        .get_session_id
+        .session_id
+        .ok_or_eyre("response did not contain SessionID")?;
 
     let inventory = database_query(
         &mut tls,
@@ -139,96 +140,76 @@ fn read_frame<R: Read>(stream: &mut R) -> eyre::Result<Vec<u8>> {
     Ok(payload)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
 struct Port {
+    #[serde(rename = "@id")]
     id: String,
+    #[serde(rename = "@Class", default)]
     class: Option<String>,
-    port_type: Option<String>,
+    #[serde(rename = "@Type", default)]
+    r#type: Option<String>,
+    #[serde(rename = "@index", default)]
     index: Option<i32>,
+    #[serde(rename = "@Status", default)]
     status: Option<i32>,
-    available: Option<i32>,
+    #[serde(rename = "@StatAvailable", default)]
+    stat_available: Option<i32>,
+    #[serde(rename = "@Connection", default)]
     connection: Option<String>,
     name: Option<String>,
 }
 
 fn parse_ports(xml: &str) -> eyre::Result<Vec<Port>> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-    let mut ports = Vec::new();
-    let mut current: Option<Port> = None;
-    let mut element = None;
-
-    loop {
-        match reader.read_event()? {
-            Event::Start(start) if start.name().as_ref() == b"Port" => {
-                current = Some(port_from_attributes(&start)?);
-            }
-            Event::Start(start) if current.is_some() => {
-                element = Some(start.name().as_ref().to_vec());
-            }
-            Event::Text(text) if current.is_some() => {
-                if element.as_deref() == Some(b"Name") {
-                    if let Some(port) = current.as_mut() {
-                        port.name = Some(text.unescape()?.into_owned());
-                    }
-                }
-            }
-            Event::End(end) if end.name().as_ref() == b"Port" => {
-                if let Some(port) = current.take() {
-                    ports.push(port);
-                }
-                element = None;
-            }
-            Event::End(_) => element = None,
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    Ok(ports)
+    Ok(from_str::<PortDocument>(xml)?.into_ports())
 }
 
-fn port_from_attributes(start: &BytesStart<'_>) -> eyre::Result<Port> {
-    let mut id = None;
-    let mut port = Port {
-        id: String::new(),
-        class: None,
-        port_type: None,
-        index: None,
-        status: None,
-        available: None,
-        connection: None,
-        name: None,
-    };
-    for attribute in start.attributes() {
-        let attribute = attribute?;
-        let value = attribute.unescape_value()?.into_owned();
-        match attribute.key.as_ref() {
-            b"id" => id = Some(value),
-            b"Class" => port.class = Some(value),
-            b"Type" => port.port_type = Some(value),
-            b"index" => port.index = value.parse().ok(),
-            b"Status" => port.status = value.parse().ok(),
-            b"StatAvailable" => port.available = value.parse().ok(),
-            b"Connection" => port.connection = Some(value),
-            _ => {}
-        }
-    }
-    port.id = id.ok_or_eyre("port has no id")?;
-    Ok(port)
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct PortDocument {
+    #[serde(default)]
+    port: Vec<Port>,
+    #[serde(default)]
+    device: Vec<PortDocument>,
+    #[serde(default)]
+    get: Vec<PortDocument>,
+    #[serde(default)]
+    data: Vec<PortDocument>,
+    #[serde(default)]
+    database: Vec<PortDocument>,
+    #[serde(default)]
+    response: Vec<PortDocument>,
 }
 
-fn xml_text(xml: &str, wanted: &str) -> eyre::Result<Option<String>> {
-    let mut reader = Reader::from_str(xml);
-    let mut inside = false;
-    loop {
-        match reader.read_event()? {
-            Event::Start(start) if start.name().as_ref() == wanted.as_bytes() => inside = true,
-            Event::Text(text) if inside => return Ok(Some(text.unescape()?.into_owned())),
-            Event::End(end) if end.name().as_ref() == wanted.as_bytes() => inside = false,
-            Event::Eof => return Ok(None),
-            _ => {}
+impl PortDocument {
+    fn into_ports(self) -> Vec<Port> {
+        let mut ports = self.port;
+        for child in self
+            .device
+            .into_iter()
+            .chain(self.get)
+            .chain(self.data)
+            .chain(self.database)
+            .chain(self.response)
+        {
+            ports.extend(child.into_ports());
         }
+        ports
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct SessionResponse {
+    #[serde(rename = "GetSessionID")]
+    get_session_id: SessionData,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct SessionData {
+    #[serde(rename = "SessionID", default)]
+    session_id: Option<String>,
 }
 
 fn escape_xml(value: &str) -> String {
@@ -261,7 +242,7 @@ mod tests {
     #[test]
     fn parses_kvm_port_attributes_and_name() {
         let ports = parse_ports(
-            r#"<Device><Port id="P_1" Class="KVM" Type="VM" index="2" Status="1" StatAvailable="1" Connection="D_1"><Name>Rack &amp; 1</Name></Port></Device>"#,
+            r#"<Database><Get><Data><Device id="D_1"><Port id="P_1" Class="KVM" Type="VM" index="2" Status="1" StatAvailable="1" Connection="D_1"><Name>Rack &amp; 1</Name></Port></Device></Data></Get></Database>"#,
         )
         .unwrap();
         assert_eq!(ports[0].name.as_deref(), Some("Rack & 1"));
