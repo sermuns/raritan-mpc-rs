@@ -36,6 +36,7 @@ struct MpcApp {
     ports: Vec<Port>,
     selected_port: Option<usize>,
     error: Option<String>,
+    connection_status: String,
     frames: Option<Receiver<FrameMessage>>,
     texture: Option<egui::TextureHandle>,
     framebuffer_size: Option<(u16, u16)>,
@@ -47,6 +48,7 @@ enum FrameMessage {
         height: u16,
         rgba: Vec<u8>,
     },
+    Status(String),
     Error(String),
 }
 
@@ -62,6 +64,7 @@ impl MpcApp {
                     .collect(),
                 selected_port: None,
                 error: None,
+                connection_status: "Ready".to_owned(),
                 frames: None,
                 texture: None,
                 framebuffer_size: None,
@@ -70,6 +73,7 @@ impl MpcApp {
                 ports: Vec::new(),
                 selected_port: None,
                 error: Some(format!("{error:?}")),
+                connection_status: "Port enumeration failed".to_owned(),
                 frames: None,
                 texture: None,
                 framebuffer_size: None,
@@ -79,8 +83,9 @@ impl MpcApp {
 
     fn start_video(&mut self, port: &Port) {
         let port_id = port.id.clone();
-        let portal = format!("//*[@id={}]", port.id);
-        let target = port.device_id.clone().unwrap_or_else(|| port.id.clone());
+        let portal = port.portal_id.clone().unwrap_or_else(|| port.id.clone());
+        let portal = format!("//*[@id={}]", portal);
+        let target = port.id.clone();
         let target = if target.starts_with("//*[@id=") {
             target
         } else {
@@ -92,18 +97,28 @@ impl MpcApp {
         self.texture = None;
         self.framebuffer_size = None;
         self.error = None;
+        self.connection_status = "Starting framebuffer worker".to_owned();
         thread::spawn(move || {
             let result = (|| -> eyre::Result<()> {
+                let status = |message: &str| {
+                    let _ = sender.send(FrameMessage::Status(message.to_owned()));
+                    info!(%message, "framebuffer connection stage");
+                };
+                status("Connecting to RDM");
                 info!(%port_id, "connecting RDM worker session");
                 let mut rdm = RdmClient::connect(HOST, USER, PASSWORD)?;
+                status("Enumerating KVM ports");
                 rdm.enumerate_ports()?;
                 let (session_id, session_key) = rdm.session_credentials()?;
                 let session_id = session_id.to_owned();
                 let session_key = session_key.to_owned();
-                rdm.connect_video_stream(&portal, &target, true)?;
+                status("Requesting video stream");
+                rdm.connect_video_stream(&portal, &target, false)?;
+                status("Video stream granted; connecting to RFB");
                 info!(%port_id, "connecting RFB worker session");
                 let mut rfb =
                     RfbStream::connect_raritan_tls(HOST, &session_id, &session_key, &port_id)?;
+                status("RFB connected; waiting for framebuffer");
                 let (width, height) = rfb
                     .framebuffer_size()
                     .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
@@ -158,6 +173,9 @@ impl eframe::App for MpcApp {
                             ));
                         }
                     }
+                    FrameMessage::Status(status) => {
+                        self.connection_status = status;
+                    }
                     FrameMessage::Error(error) => {
                         warn!(%error, "framebuffer error received by GUI");
                         self.error = Some(error)
@@ -210,7 +228,7 @@ impl eframe::App for MpcApp {
                         let size = texture.size_vec2();
                         ui.image((texture.id(), size));
                     } else {
-                        ui.label("Connecting to framebuffer...");
+                        ui.label(&self.connection_status);
                     }
                 } else {
                     ui.heading("Select a KVM port");
