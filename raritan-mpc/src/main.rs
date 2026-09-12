@@ -172,55 +172,70 @@ impl eframe::App for MpcApp {
         }
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
-        ui.heading("Raritan MPC");
-        ui.label(HOST);
-        ui.separator();
-
-        if let Some(error) = &self.error {
-            ui.colored_label(egui::Color32::RED, error);
-        }
-
-        let available_width = ui.available_width();
-        ui.horizontal(|ui| {
-            ui.set_width(available_width * 0.3);
-            ui.vertical(|ui| {
-                ui.heading("KVM ports");
-                for index in 0..self.ports.len() {
-                    let port = &self.ports[index];
-                    let label = format!(
-                        "{}  {}",
-                        port.index
-                            .map_or_else(|| "?".to_owned(), |value| value.to_string()),
-                        port.name.as_deref().unwrap_or(&port.id),
-                    );
-                    if ui
-                        .selectable_label(self.selected_port == Some(index), label)
-                        .clicked()
-                    {
-                        self.selected_port = Some(index);
-                        let selected_port = port.clone();
-                        self.start_video(&selected_port);
-                    }
+        egui::Panel::top("header").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Raritan MPC");
+                ui.label(HOST);
+                if let Some(error) = &self.error {
+                    ui.colored_label(egui::Color32::RED, error);
                 }
             });
+        });
 
-            ui.separator();
-            ui.vertical_centered(|ui| {
-                if let Some(index) = self.selected_port {
-                    let port = &self.ports[index];
-                    ui.heading(port.name.as_deref().unwrap_or("Selected port"));
-                    ui.label(format!("Port ID: {}", port.id));
-                    ui.separator();
-                    if let Some(texture) = &self.texture {
-                        let size = texture.size_vec2();
-                        ui.image((texture.id(), size));
-                    } else {
-                        ui.label(&self.connection_status);
+        egui::Panel::left("ports")
+            .default_size(220.0)
+            .show(ui, |ui| {
+                ui.heading("KVM ports");
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for index in 0..self.ports.len() {
+                        let port = &self.ports[index];
+                        let label = format!(
+                            "{}  {}",
+                            port.index
+                                .map_or_else(|| "?".to_owned(), |value| value.to_string()),
+                            port.name.as_deref().unwrap_or(&port.id),
+                        );
+                        if ui
+                            .selectable_label(self.selected_port == Some(index), label)
+                            .clicked()
+                        {
+                            self.selected_port = Some(index);
+                            let selected_port = port.clone();
+                            self.start_video(&selected_port);
+                        }
+                    }
+                });
+            });
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            if let Some(index) = self.selected_port {
+                let port = &self.ports[index];
+                ui.heading(port.name.as_deref().unwrap_or("Selected port"));
+                ui.label(format!("Port ID: {}", port.id));
+                ui.separator();
+                if let Some(texture) = &self.texture {
+                    // Scale the framebuffer to fit the remaining panel
+                    // area, preserving aspect ratio.
+                    let native = texture.size_vec2();
+                    let avail = ui.available_size();
+                    if avail.x > 0.0 && avail.y > 0.0 {
+                        let scale = (avail.x / native.x).min(avail.y / native.y);
+                        if scale.is_finite() && scale > 0.0 {
+                            ui.centered_and_justified(|ui| {
+                                ui.image((texture.id(), native * scale));
+                            });
+                        }
                     }
                 } else {
-                    ui.heading("Select a KVM port");
+                    ui.centered_and_justified(|ui| {
+                        ui.label(&self.connection_status);
+                    });
                 }
-            });
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.heading("Select a KVM port");
+                });
+            }
         });
     }
 }
