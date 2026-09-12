@@ -50,6 +50,8 @@ struct MpcApp {
     /// Pending port-list refresh result. `Some` while the background
     /// enumeration runs; the button is inert until it completes.
     port_refresh: Option<Receiver<Result<Vec<Port>, String>>>,
+    /// Whether the Ctrl+Alt+Delete confirmation dialog is open.
+    confirm_cad: bool,
 }
 
 enum FrameMessage {
@@ -82,6 +84,7 @@ impl MpcApp {
                 show_sidebar: true,
                 sort_by_name: false,
                 port_refresh: None,
+                confirm_cad: false,
             },
             Err(error) => Self {
                 ports: Vec::new(),
@@ -95,6 +98,7 @@ impl MpcApp {
                 show_sidebar: true,
                 sort_by_name: false,
                 port_refresh: None,
+                confirm_cad: false,
             },
         }
     }
@@ -273,6 +277,29 @@ fn is_read_timeout(error: &eyre::Report) -> bool {
             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
         )
     })
+}
+
+/// Ctrl+Alt+Delete press/release sequence (left modifiers, Delete),
+/// resolved through the en_US Eric table. Presses go down in order,
+/// releases come back in reverse.
+fn cad_sequence() -> Vec<VideoCommand> {
+    let held: Vec<u16> = [(17, 2), (18, 2), (127, 1)]
+        .into_iter()
+        .filter_map(|(code, location)| eric_code(code, location))
+        .collect();
+    if held.len() != 3 {
+        return Vec::new();
+    }
+    let mut sequence: Vec<VideoCommand> = held
+        .iter()
+        .map(|&eric| VideoCommand::Key { eric, down: true })
+        .collect();
+    sequence.extend(
+        held.iter()
+            .rev()
+            .map(|&eric| VideoCommand::Key { eric, down: false }),
+    );
+    sequence
 }
 
 /// Maps an egui key to the Java key code + location the en_US Eric table
@@ -544,7 +571,11 @@ impl eframe::App for MpcApp {
                                 self.texture = None;
                                 self.framebuffer_size = None;
                                 self.selected_port = None;
+                                self.confirm_cad = false;
                                 self.connection_status = "Disconnected".to_owned();
+                            }
+                            if ui.button("Ctrl+Alt+Del").clicked() {
+                                self.confirm_cad = true;
                             }
                             if ui.button("Auto sense").clicked()
                                 && let Some(tx) = &self.cmd_tx
@@ -569,6 +600,29 @@ impl eframe::App for MpcApp {
                     ui.colored_label(egui::Color32::RED, error);
                 }
                 ui.separator();
+                // Confirmation dialog for the Secure Attention Sequence.
+                // Rendered as a floating window so it can't be missed.
+                if self.confirm_cad {
+                    egui::Window::new("Send Ctrl+Alt+Delete?")
+                        .collapsible(false)
+                        .resizable(false)
+                        .show(ui.ctx(), |ui| {
+                            ui.label("Send Ctrl+Alt+Delete to the selected port?");
+                            ui.horizontal(|ui| {
+                                if ui.button("Yes").clicked() {
+                                    if let Some(tx) = &self.cmd_tx {
+                                        for command in cad_sequence() {
+                                            let _ = tx.send(command);
+                                        }
+                                    }
+                                    self.confirm_cad = false;
+                                }
+                                if ui.button("No").clicked() {
+                                    self.confirm_cad = false;
+                                }
+                            });
+                        });
+                }
                 if let Some(texture) = &self.texture {
                     // Scale the framebuffer to fit the remaining panel
                     // area, preserving aspect ratio.
