@@ -55,6 +55,7 @@ impl PixelFormat {
 pub struct Framebuffer {
     pub width: u16,
     pub height: u16,
+    /// Pixel buffer in RGBA byte order (egui/PPM-ready).
     pub rgba: Vec<u8>,
 }
 
@@ -126,12 +127,15 @@ impl Framebuffer {
         Ok(())
     }
 
+    /// Paints one `0xAARRGGBB` pixel (the Java int-pixel convention used
+    /// by all decoder tables) into the RGBA buffer.
     pub(crate) fn put_pixel(&mut self, x: usize, y: usize, color: u32) {
         if x >= self.width as usize || y >= self.height as usize {
             return;
         }
         let offset = (y * self.width as usize + x) * 4;
-        self.rgba[offset..offset + 4].copy_from_slice(&color.to_be_bytes());
+        let [a, r, g, b] = color.to_be_bytes();
+        self.rgba[offset..offset + 4].copy_from_slice(&[r, g, b, a]);
     }
 }
 
@@ -143,4 +147,37 @@ pub fn rgb(value: u32, format: PixelFormat) -> u32 {
     let blue = ((value >> format.blue_shift) & u32::from(format.blue_max)) * 255
         / u32::from(format.blue_max.max(1));
     0xff00_0000 | red << 16 | green << 8 | blue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guards the buffer byte order: a raw RGB565 red + blue pair must
+    /// land as RGBA bytes (egui/PPM read R,G,B,A in order). Storing the
+    /// native `0xAARRGGBB` int directly tints everything red.
+    #[test]
+    fn pixels_are_stored_in_rgba_order() {
+        let mut framebuffer = Framebuffer::new(2, 1);
+        framebuffer
+            .apply_update(
+                &FramebufferUpdate {
+                    flags: 0,
+                    rectangles: vec![FramebufferRectangle {
+                        x: 0,
+                        y: 0,
+                        width: 2,
+                        height: 1,
+                        encoding: 0,
+                        data: vec![0xF8, 0x00, 0x00, 0x1F],
+                    }],
+                },
+                PixelFormat::RGB565,
+            )
+            .unwrap();
+        assert_eq!(
+            framebuffer.rgba,
+            vec![255, 0, 0, 255, 0, 0, 255, 255]
+        );
+    }
 }

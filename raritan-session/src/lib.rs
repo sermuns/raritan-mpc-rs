@@ -116,7 +116,7 @@ pub fn encode_ppm(framebuffer: &Framebuffer) -> Vec<u8> {
     let mut ppm = format!("P6\n{} {}\n255\n", framebuffer.width, framebuffer.height).into_bytes();
     let (pixels, _remainder) = framebuffer.rgba.as_chunks::<4>();
     for pixel in pixels {
-        ppm.extend_from_slice(&pixel[1..4]);
+        ppm.extend_from_slice(&pixel[0..3]);
     }
     ppm
 }

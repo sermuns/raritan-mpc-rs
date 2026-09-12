@@ -184,12 +184,12 @@ mod tests {
         framebuffer
             .apply_update(&update, PixelFormat::RGB565)
             .unwrap();
-        // Every pixel carries an opaque alpha once painted; the untouched
-        // background stays zero.
+        // Every pixel carries an opaque alpha (last byte) once painted;
+        // the untouched background stays zero.
         let painted = framebuffer
             .rgba
             .chunks_exact(4)
-            .filter(|pixel| pixel[0] != 0)
+            .filter(|pixel| pixel[3] != 0)
             .count();
         assert_eq!(painted, 16 * 16);
     }
