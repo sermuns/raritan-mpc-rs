@@ -50,7 +50,7 @@ struct MpcApp {
     texture: Option<egui::TextureHandle>,
     framebuffer_size: Option<(u16, u16)>,
     show_sidebar: bool,
-    sort_by_name: bool,
+    sort_order: SortOrder,
     /// Pending port-list refresh result. `Some` while the background
     /// enumeration runs; the button is inert until it completes.
     port_refresh: Option<Receiver<Result<Vec<Port>, String>>>,
@@ -66,6 +66,22 @@ struct MpcApp {
     last_pointer: Option<(u8, u16, u16)>,
     /// Fractional wheel lines awaiting a whole notch.
     wheel_remainder: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SortOrder {
+    #[default]
+    PortNumber,
+    Name,
+}
+
+impl SortOrder {
+    fn label(self) -> &'static str {
+        match self {
+            SortOrder::PortNumber => "Port number",
+            SortOrder::Name => "Name",
+        }
+    }
 }
 
 enum FrameMessage {
@@ -96,7 +112,7 @@ impl MpcApp {
                 texture: None,
                 framebuffer_size: None,
                 show_sidebar: true,
-                sort_by_name: false,
+                sort_order: SortOrder::default(),
                 port_refresh: None,
                 confirm_cad: false,
                 viewport: None,
@@ -114,7 +130,7 @@ impl MpcApp {
                 texture: None,
                 framebuffer_size: None,
                 show_sidebar: true,
-                sort_by_name: false,
+                sort_order: SortOrder::default(),
                 port_refresh: None,
                 confirm_cad: false,
                 viewport: None,
@@ -173,10 +189,10 @@ impl MpcApp {
     }
 
     /// Display order for the port list: enumeration (port-number) order
-    /// by default, case-insensitive by name when toggled.
+    /// by default, case-insensitive by name when selected.
     fn port_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.ports.len()).collect();
-        if self.sort_by_name {
+        if self.sort_order == SortOrder::Name {
             order.sort_by(|&a, &b| {
                 let name = |index: usize| {
                     self.ports[index]
@@ -701,8 +717,20 @@ impl eframe::App for MpcApp {
                             {
                                 self.refresh_ports();
                             }
-                            ui.toggle_value(&mut self.sort_by_name, "A–Z")
-                                .on_hover_text("Sort by name instead of port number");
+                            egui::ComboBox::from_id_salt("port_sort")
+                                .selected_text(self.sort_order.label())
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.sort_order,
+                                        SortOrder::PortNumber,
+                                        SortOrder::PortNumber.label(),
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.sort_order,
+                                        SortOrder::Name,
+                                        SortOrder::Name.label(),
+                                    );
+                                });
                         });
                     });
                     if self.port_refresh.is_some() {
