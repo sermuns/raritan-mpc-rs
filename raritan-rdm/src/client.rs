@@ -83,12 +83,55 @@ impl RdmClient {
         })
     }
 
+    /// Opens the CSC+TLS channel without authenticating (diagnostic aid).
+    pub fn connect_unauthed(host: impl Into<String>) -> eyre::Result<Self> {
+        let host = host.into();
+        let mut stream = TcpStream::connect((&*host, 5000))
+            .wrap_err_with(|| format!("connecting to {host}:5000"))?;
+        stream.set_read_timeout(Some(RDM_READ_TIMEOUT))?;
+        let greeting = read_frame(&mut stream)?;
+        if !greeting.starts_with(b"<CSC") {
+            bail!("unexpected CSC greeting");
+        }
+        write_frame(&mut stream, "<CSC_Ack/>")?;
+        let info = read_frame(&mut stream)?;
+        if !info.starts_with(b"<CSC_Info") {
+            bail!("unexpected CSC info");
+        }
+        write_frame(&mut stream, r#"<CSC_Start_Session ProtocolID="RDM"/>"#)?;
+        let tls = tls_connector()?.connect(&host, stream)?;
+        Ok(Self {
+            stream: tls,
+            host,
+            user: String::new(),
+            password: String::new(),
+            session_id: None,
+            session_key: None,
+        })
+    }
+
     pub fn database_query(&mut self, request: &str) -> eyre::Result<String> {
         write_frame(&mut self.stream, request)?;
         let response = read_frame(&mut self.stream)?;
         Ok(String::from_utf8(response)?
             .trim_end_matches('\0')
             .to_owned())
+    }
+
+    /// Raw XML of the top-level IP-Reach port inventory (debugging aid).
+    pub fn raw_inventory(&mut self) -> eyre::Result<String> {
+        self.database_query(
+            "<Database><Get><Select>/System/Device[@Type='IP-Reach']/Port</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>",
+        )
+    }
+
+    /// Raw XML of one device subtree (debugging aid).
+    pub fn raw_device(&mut self, device_id: &str) -> eyre::Result<String> {
+        use crate::protocol::escape_xml;
+        self.database_query(&format!(
+            "<Database><Get><Select>/System/Device[@id='{}']</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>",
+            escape_xml(device_id)
+        ))
     }
 
     pub fn enumerate_ports(&mut self) -> eyre::Result<Vec<crate::Port>> {
@@ -167,11 +210,154 @@ impl RdmClient {
         ))
     }
 
+    /// Opens the RDMEvent referral session the Java client (`TRConnection`
+    /// KX2 path via `CSCConnect.startReferralCSCSession`) always holds while
+    /// connecting video: fresh TCP to :5000, CSC handshake, `StartSession`
+    /// with `RDMEvent` + our session ID, TLS upgrade, then the RC4
+    /// `CSC_Test2` challenge dance keyed by the RDM session key.
+    pub fn open_event_session(
+        &self,
+        session_id: &str,
+        session_key: &str,
+    ) -> eyre::Result<()> {
+        use crate::protocol::{read_frame, write_frame};
+
+        info!(%session_id, "opening RDM event session");
+        let mut socket = TcpStream::connect((&*self.host, 5000))
+            .wrap_err_with(|| format!("connecting to {}:5000", self.host))?;
+        socket.set_read_timeout(Some(RDM_READ_TIMEOUT))?;
+
+        let greeting = read_frame(&mut socket)?;
+        if !greeting.starts_with(b"<CSC") {
+            bail!("unexpected event CSC greeting");
+        }
+        write_frame(&mut socket, "<CSC_Ack/>")?;
+        let _info = read_frame(&mut socket)?;
+        write_frame(
+            &mut socket,
+            &format!(
+                r#"<CSC_Start_Session ProtocolID="RDMEvent" SessionID="{}"/>"#,
+                escape_xml(session_id)
+            ),
+        )?;
+        let mut tls = tls_connector()?.connect(&self.host, socket)?;
+
+        let challenge = String::from_utf8(read_frame(&mut tls)?)?;
+        let clear_text = xml_attribute(&challenge, "ClearText")
+            .ok_or_eyre("event authentication challenge lacks ClearText")?;
+        let key = decode_base64(session_key)?;
+        let encrypted = rc4(&key, &decode_base64(&clear_text)?)?;
+        // CSCConnect.CSC_Test: time-XOR over "1234567890".
+        let mut clear = Vec::with_capacity(10);
+        let mut state = current_time_millis();
+        for byte in b"1234567890" {
+            clear.push(*byte ^ state as u8);
+            state = (state >> 3) ^ current_time_millis();
+        }
+        write_frame(
+            &mut tls,
+            &format!(
+                r#"<CSC_Test2 Encrypted="{}" ClearText="{}"/>"#,
+                STANDARD.encode(encrypted),
+                STANDARD.encode(&clear)
+            ),
+        )?;
+        let response = String::from_utf8(read_frame(&mut tls)?)?;
+        let echoed = xml_attribute(&response, "Encrypted")
+            .ok_or_eyre("event authentication response lacks Encrypted")?;
+        if rc4(&key, &decode_base64(&echoed)?)? != clear {
+            bail!("RDM event session authentication failed");
+        }
+        info!("RDM event session established");
+        // Drain server events in the background (mirrors TRConnection's
+        // event loop) so any reaction to our commands gets logged.
+        std::thread::spawn(move || {
+            let _ = tls
+                .get_ref()
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)));
+            loop {
+                match read_frame(&mut tls) {
+                    Ok(frame) => info!(
+                        length = frame.len(),
+                        payload = %crate::protocol::display_xml(&frame),
+                        "RDM event",
+                    ),
+                    Err(error) => {
+                        let idle = error
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|io| {
+                                matches!(
+                                    io.kind(),
+                                    std::io::ErrorKind::WouldBlock
+                                        | std::io::ErrorKind::TimedOut
+                                )
+                            });
+                        if !idle {
+                            info!(error = %format!("{error:#}"), "RDM event session closed");
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// Sends TR PINGs (cmd 3) with several packet IDs and waits briefly
+    /// for a PONG, purely to check whether the server's TR layer processes
+    /// our binary commands. Returns true if any response arrived.
+    pub fn probe_ping(&mut self) -> bool {
+        let _ = self.stream.get_ref().set_read_timeout(Some(
+            std::time::Duration::from_secs(3),
+        ));
+        for (cmd, packet_id) in [(3u8, 1u8), (3, 0), (3, 9), (2, 1), (2, 0)] {
+            let command = [0u8, 4, cmd, packet_id];
+            if self.stream.write_all(&command).is_err() {
+                return false;
+            }
+            let _ = self.stream.flush();
+            match read_rdm_command(&mut self.stream) {
+                Ok(response) => {
+                    info!(
+                        length = response.len(),
+                        command = response.get(2).copied(),
+                        packet = response.get(3).copied(),
+                        packet_id,
+                        "TR ping answered"
+                    );
+                    let _ = self
+                        .stream
+                        .get_ref()
+                        .set_read_timeout(Some(RDM_READ_TIMEOUT));
+                    return true;
+                }
+                Err(error) => {
+                    info!(packet_id, error = %format!("{error:#}"), "TR ping unanswered");
+                }
+            }
+        }
+        let _ = self
+            .stream
+            .get_ref()
+            .set_read_timeout(Some(RDM_READ_TIMEOUT));
+        false
+    }
+
     pub fn connect_video_stream(
         &mut self,
         portal: &str,
         target: &str,
         force: bool,
+    ) -> eyre::Result<u8> {
+        self.connect_video_stream_timeout(portal, target, force, 25)
+    }
+
+    pub fn connect_video_stream_timeout(
+        &mut self,
+        portal: &str,
+        target: &str,
+        force: bool,
+        timeout_secs: u64,
     ) -> eyre::Result<u8> {
         info!(%portal, %target, force, "requesting video stream");
         let xml = if force {
@@ -199,7 +385,15 @@ impl RdmClient {
         command.extend_from_slice(xml.as_bytes());
         self.stream.write_all(&command)?;
         self.stream.flush()?;
-        debug!(length = length, "sent connect-video-stream command");
+        debug!(
+            length = length,
+            command = %command
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+            "sent connect-video-stream command"
+        );
 
         debug!("waiting for connect-video-stream response");
         fn video_compression_parameters() -> [u8; 40] {
@@ -209,9 +403,26 @@ impl RdmClient {
             parameters[24..28].copy_from_slice(&6u32.to_be_bytes());
             parameters
         }
+        // TRRSP::CONNECT_TIMEOUT: the Java client waits 20 s for the grant;
+        // video detection on the target can take a while. Like Java's
+        // Monitor.waiting(20000), keep reading until the deadline and only
+        // then report the last error.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        self.stream
+            .get_ref()
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         loop {
-            let response =
-                read_rdm_command(&mut self.stream).wrap_err("waiting for video-stream response")?;
+            let response = match read_rdm_command(&mut self.stream) {
+                Ok(response) => response,
+                Err(error) => {
+                    debug!(error = %format!("{error:#}"), "RDM read while waiting for grant");
+                    if std::time::Instant::now() >= deadline {
+                        return Err(error).wrap_err("waiting for video-stream response");
+                    }
+                    continue;
+                }
+            };
             let response_command = response[2];
             let response_packet = response[3];
             debug!(
@@ -346,6 +557,19 @@ fn tls_connector() -> eyre::Result<SslConnector> {
     builder.set_min_proto_version(Some(SslVersion::TLS1))?;
     builder.set_max_proto_version(Some(SslVersion::TLS1))?;
     builder.set_verify(SslVerifyMode::NONE);
+    // Standard SSLKEYLOGFILE support for decrypting captures with Wireshark.
+    if let Ok(path) = std::env::var("SSLKEYLOGFILE") {
+        builder.set_keylog_callback(move |_ssl, line| {
+            use std::io::Write as _;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(file, "{line}");
+            }
+        });
+    }
     Ok(builder.build())
 }
 

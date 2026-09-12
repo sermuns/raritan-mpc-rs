@@ -83,15 +83,7 @@ impl MpcApp {
 
     fn start_video(&mut self, port: &Port) {
         let port_id = port.id.clone();
-        let portal = port.portal_id.clone().unwrap_or_else(|| port.id.clone());
-        let portal = format!("//*[@id={}]", portal);
-        let target = port.id.clone();
-        let target = if target.starts_with("//*[@id=") {
-            target
-        } else {
-            format!("//*[@id={}]", target)
-        };
-        info!(%port_id, %portal, %target, "starting framebuffer worker");
+        info!(%port_id, "starting framebuffer worker");
         let (sender, receiver) = mpsc::channel();
         self.frames = Some(receiver);
         self.texture = None;
@@ -112,12 +104,17 @@ impl MpcApp {
                 let (session_id, session_key) = rdm.session_credentials()?;
                 let session_id = session_id.to_owned();
                 let session_key = session_key.to_owned();
-                status("Requesting video stream");
-                rdm.connect_video_stream(&portal, &target, false)?;
-                status("Video stream granted; connecting to RFB");
+                // NOTE: the TR video-stream grant (cmd 55) is intentionally
+                // skipped: the switch never answers it, while RFB carries
+                // its own KVM-switch event and streams fine without it.
+                // Hold the RDM event session like the Java client does.
+                if let Err(error) = rdm.open_event_session(&session_id, &session_key) {
+                    warn!(%error, "RDM event session failed; continuing without it");
+                }
+                status("Connecting to RFB");
                 info!(%port_id, "connecting RFB worker session");
                 let mut rfb =
-                    RfbStream::connect_raritan_tls(HOST, &session_id, &session_key, &port_id)?;
+                    RfbStream::connect_raritan(HOST, &session_id, &session_key, &port_id)?;
                 status("RFB connected; waiting for framebuffer");
                 let (width, height) = rfb
                     .framebuffer_size()
@@ -137,7 +134,7 @@ impl MpcApp {
                         height,
                         rgba: framebuffer.rgba.clone(),
                     })?;
-                    rfb.request_framebuffer_update(width, height, true)?;
+                    rfb.request_framebuffer_update(true)?;
                 }
             })();
             if let Err(error) = result {

@@ -6,4 +6,7 @@ edition.workspace = true
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 raritan-rdm = { path = "../raritan-rdm" }
+raritan-rfb = { path = "../raritan-rfb" }

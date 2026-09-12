@@ -2071,6 +2071,9 @@ dependencies = [
  "clap",
  "color-eyre",
  "raritan-rdm",
+ "raritan-rfb",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
