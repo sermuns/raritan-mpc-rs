@@ -287,6 +287,11 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
 impl eframe::App for MpcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(receiver) = &self.frames {
+            // Drain the backlog but upload only the freshest frame: when
+            // the network outruns the UI, intermediate frames would each
+            // cost a texture upload for a pixel that is never displayed.
+            // Status/Error messages are still all processed in order.
+            let mut latest_frame: Option<(u16, u16, Vec<u8>)> = None;
             while let Ok(message) = receiver.try_recv() {
                 match message {
                     FrameMessage::Frame {
@@ -294,20 +299,7 @@ impl eframe::App for MpcApp {
                         height,
                         rgba,
                     } => {
-                        self.framebuffer_size = Some((width, height));
-                        let image = egui::ColorImage::from_rgba_unmultiplied(
-                            [width as usize, height as usize],
-                            &rgba,
-                        );
-                        if let Some(texture) = &mut self.texture {
-                            texture.set(image, egui::TextureOptions::LINEAR);
-                        } else {
-                            self.texture = Some(ui.ctx().load_texture(
-                                "framebuffer",
-                                image,
-                                egui::TextureOptions::LINEAR,
-                            ));
-                        }
+                        latest_frame = Some((width, height, rgba));
                     }
                     FrameMessage::Status(status) => {
                         self.connection_status = status;
@@ -318,6 +310,22 @@ impl eframe::App for MpcApp {
                         // Worker is gone; stop queueing keys for it.
                         self.key_tx = None;
                     }
+                }
+            }
+            if let Some((width, height, rgba)) = latest_frame {
+                self.framebuffer_size = Some((width, height));
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [width as usize, height as usize],
+                    &rgba,
+                );
+                if let Some(texture) = &mut self.texture {
+                    texture.set(image, egui::TextureOptions::LINEAR);
+                } else {
+                    self.texture = Some(ui.ctx().load_texture(
+                        "framebuffer",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
                 }
             }
         }
