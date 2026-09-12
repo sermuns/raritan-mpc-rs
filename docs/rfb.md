@@ -67,6 +67,12 @@ the server start sending frames.
   E→0x11, L→0x25, O→0x17, Space→0x38, W→0x10, R→0x12, D→0x1f,
   Enter→0x1b — verified byte-for-byte against a Java capture typing
   "hello world" + Enter (`input.rs::eric_code`, `write_key_event`).
+- Pointer event (`RfbPointerEventMsgV01_22`, type 5):
+  `[5, buttons, x:u16-be, y:u16-be, wheel:u16-be]` with the standard
+  button mask (bit 0 left, 1 middle, 2 right, toggled per click).
+  Wheel-only events carry `x = y = 0` with the signed rotation in
+  `wheel`. Verified against a Java capture of mouse moves plus one
+  left click (`05 01 01 d1 01 b4 00 00`).
 - Pointer event (type 5), mouse sync (134), KVM switch (137) as in the
   session-init tail above.
 - Video-settings action (`RfbVideoSettingsC2SMsgV01_22`, type 144):

@@ -52,6 +52,16 @@ struct MpcApp {
     port_refresh: Option<Receiver<Result<Vec<Port>, String>>>,
     /// Whether the Ctrl+Alt+Delete confirmation dialog is open.
     confirm_cad: bool,
+    /// Displayed image rect from the last frame, for mapping pointer
+    /// positions to target pixels.
+    viewport: Option<egui::Rect>,
+    /// Currently held mouse buttons (RFB mask) on the target.
+    mouse_buttons: u8,
+    /// Last pointer state sent (buttons, x, y); moves only go out on
+    /// change, like the Java client.
+    last_pointer: Option<(u8, u16, u16)>,
+    /// Fractional wheel lines awaiting a whole notch.
+    wheel_remainder: f32,
 }
 
 enum FrameMessage {
@@ -85,6 +95,10 @@ impl MpcApp {
                 sort_by_name: false,
                 port_refresh: None,
                 confirm_cad: false,
+                viewport: None,
+                mouse_buttons: 0,
+                last_pointer: None,
+                wheel_remainder: 0.0,
             },
             Err(error) => Self {
                 ports: Vec::new(),
@@ -99,6 +113,10 @@ impl MpcApp {
                 sort_by_name: false,
                 port_refresh: None,
                 confirm_cad: false,
+                viewport: None,
+                mouse_buttons: 0,
+                last_pointer: None,
+                wheel_remainder: 0.0,
             },
         }
     }
@@ -112,6 +130,10 @@ impl MpcApp {
         self.cmd_tx = Some(cmd_sender);
         self.texture = None;
         self.framebuffer_size = None;
+        self.viewport = None;
+        self.mouse_buttons = 0;
+        self.last_pointer = None;
+        self.wheel_remainder = 0.0;
         self.error = None;
         self.connection_status = "Starting framebuffer worker".to_owned();
         thread::spawn(move || {
@@ -166,6 +188,15 @@ impl MpcApp {
                                     info!(setting, value, "sending video-settings event");
                                     rfb.write_video_settings_event(setting, value)?;
                                 }
+                                VideoCommand::Pointer {
+                                    buttons,
+                                    x,
+                                    y,
+                                    wheel,
+                                } => {
+                                    tracing::trace!(buttons, x, y, wheel, "sending pointer event");
+                                    rfb.write_pointer_event(buttons, x, y, wheel)?;
+                                }
                             }
                         }
                         let update = match rfb.read_message() {
@@ -190,6 +221,8 @@ impl MpcApp {
                 for eric in held {
                     let _ = rfb.write_key_event(eric, false);
                 }
+                // Release any held mouse buttons for the same reason.
+                let _ = rfb.write_pointer_event(0, 0, 0, 0);
                 result
             })();
             if let Err(error) = result {
@@ -266,6 +299,89 @@ impl MpcApp {
             }
         }
     }
+
+    /// Builds pointer commands for this frame from unhandled input.
+    /// Button transitions always go out (at the last known position
+    /// when the pointer is outside the image, so a release can't be
+    /// lost); moves only when hovering the image and changed; wheel
+    /// notches become wheel-only events exactly like the Java client.
+    fn pointer_commands(&mut self, ui: &egui::Ui) -> Vec<VideoCommand> {
+        let Some(size) = self.framebuffer_size else {
+            return Vec::new();
+        };
+        let (button_changes, wheel_lines, hover) = ui.ctx().input(|input| {
+            let mut changes = Vec::new();
+            let mut lines = 0.0;
+            for event in &input.events {
+                match event {
+                    egui::Event::PointerButton {
+                        button, pressed, ..
+                    } => {
+                        changes.push((pointer_bit(*button), *pressed));
+                    }
+                    egui::Event::MouseWheel { unit, delta, .. } => {
+                        lines += match unit {
+                            egui::MouseWheelUnit::Line => delta.y,
+                            egui::MouseWheelUnit::Point => delta.y / 50.0,
+                            egui::MouseWheelUnit::Page => delta.y * 3.0,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            (changes, lines, input.pointer.hover_pos())
+        });
+        for (bit, pressed) in &button_changes {
+            if *pressed {
+                self.mouse_buttons |= bit;
+            } else {
+                self.mouse_buttons &= !bit;
+            }
+        }
+        let buttons = self.mouse_buttons;
+        let mut commands = Vec::new();
+        let mapped =
+            hover.and_then(|pos| self.viewport.and_then(|rect| map_pointer(rect, size, pos)));
+        let fallback = self.last_pointer.map(|(_, x, y)| (x, y)).or(Some((0, 0)));
+        if !button_changes.is_empty() {
+            if let Some((x, y)) = mapped.or(fallback) {
+                commands.push(VideoCommand::Pointer {
+                    buttons,
+                    x,
+                    y,
+                    wheel: 0,
+                });
+                self.last_pointer = Some((buttons, x, y));
+            }
+        } else if let Some((x, y)) = mapped
+            && self.last_pointer != Some((buttons, x, y))
+        {
+            commands.push(VideoCommand::Pointer {
+                buttons,
+                x,
+                y,
+                wheel: 0,
+            });
+            self.last_pointer = Some((buttons, x, y));
+        }
+        // Java counts wheel-up as negative rotation; egui reports +y.
+        self.wheel_remainder += wheel_lines;
+        let mut steps = self.wheel_remainder.trunc() as i32;
+        if steps != 0 {
+            self.wheel_remainder -= steps as f32;
+            while steps != 0 {
+                let step = steps.signum();
+                steps -= step;
+                commands.push(VideoCommand::Pointer {
+                    buttons,
+                    x: 0,
+                    y: 0,
+                    wheel: (-step) as i16 as u16,
+                });
+            }
+        }
+        commands
+    }
 }
 
 /// True when the error is just the worker's read timeout expiring
@@ -277,6 +393,36 @@ fn is_read_timeout(error: &eyre::Report) -> bool {
             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
         )
     })
+}
+
+/// RFB button bit for an egui pointer button (standard mask: bit 0
+/// left, 1 middle, 2 right).
+fn pointer_bit(button: egui::PointerButton) -> u8 {
+    match button {
+        egui::PointerButton::Primary => 1,
+        egui::PointerButton::Middle => 2,
+        egui::PointerButton::Secondary => 4,
+        egui::PointerButton::Extra1 => 8,
+        egui::PointerButton::Extra2 => 16,
+    }
+}
+
+/// Maps a window position to target framebuffer pixels via the displayed
+/// image rect. `None` when the pointer is outside the image.
+fn map_pointer(viewport: egui::Rect, size: (u16, u16), pos: egui::Pos2) -> Option<(u16, u16)> {
+    if !viewport.contains(pos) {
+        return None;
+    }
+    let (width, height) = (f32::from(size.0), f32::from(size.1));
+    if width <= 0.0 || height <= 0.0 || viewport.width() <= 0.0 || viewport.height() <= 0.0 {
+        return None;
+    }
+    let x = (((pos.x - viewport.min.x) / viewport.width()) * width) as u16;
+    let y = (((pos.y - viewport.min.y) / viewport.height()) * height) as u16;
+    Some((
+        x.min(size.0.saturating_sub(1)),
+        y.min(size.1.saturating_sub(1)),
+    ))
 }
 
 /// Ctrl+Alt+Delete press/release sequence (left modifiers, Delete),
@@ -447,8 +593,10 @@ impl eframe::App for MpcApp {
         // Forward physical key presses to the KVM target while a video
         // session runs. Text events are deliberately ignored (the Key
         // press/release pair already carries what the target needs).
-        if let Some(tx) = &self.cmd_tx {
-            let keys: Vec<VideoCommand> = ui.ctx().input(|input| {
+        // Pointer moves/clicks/wheel go through the same channel once
+        // mapped from the displayed image rect to target pixels.
+        if self.cmd_tx.is_some() {
+            let mut commands: Vec<VideoCommand> = ui.ctx().input(|input| {
                 input
                     .events
                     .iter()
@@ -466,8 +614,11 @@ impl eframe::App for MpcApp {
                     })
                     .collect()
             });
-            for command in keys {
-                let _ = tx.send(command);
+            commands.extend(self.pointer_commands(ui));
+            if let Some(tx) = &self.cmd_tx {
+                for command in commands {
+                    let _ = tx.send(command);
+                }
             }
         }
 
@@ -572,6 +723,10 @@ impl eframe::App for MpcApp {
                                 self.framebuffer_size = None;
                                 self.selected_port = None;
                                 self.confirm_cad = false;
+                                self.viewport = None;
+                                self.mouse_buttons = 0;
+                                self.last_pointer = None;
+                                self.wheel_remainder = 0.0;
                                 self.connection_status = "Disconnected".to_owned();
                             }
                             if ui.button("Ctrl+Alt+Del").clicked() {
@@ -627,13 +782,19 @@ impl eframe::App for MpcApp {
                     // Scale the framebuffer to fit the remaining panel
                     // area, preserving aspect ratio.
                     let native = texture.size_vec2();
+                    let texture_id = texture.id();
                     let avail = ui.available_size();
                     if avail.x > 0.0 && avail.y > 0.0 {
                         let scale = (avail.x / native.x).min(avail.y / native.y);
                         if scale.is_finite() && scale > 0.0 {
-                            ui.centered_and_justified(|ui| {
-                                ui.image((texture.id(), native * scale));
-                            });
+                            let rect = ui
+                                .centered_and_justified(|ui| {
+                                    ui.image((texture_id, native * scale)).rect
+                                })
+                                .inner;
+                            // Remember where the image landed so pointer
+                            // positions map back to target pixels.
+                            self.viewport = Some(rect);
                         }
                     }
                 } else {

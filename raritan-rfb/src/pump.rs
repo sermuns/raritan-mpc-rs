@@ -4,17 +4,17 @@
 use crate::{
     framebuffer::{FramebufferRectangle, FramebufferUpdate, PixelFormat},
     proto::{
-        ACK_PIXEL_FORMAT, BANDWIDTH_REQUEST, CONNECTION_PARAMETERS, FRAMEBUFFER_UPDATE,
-        KEYBOARD_LAYOUT, OSD_STATE, PING_REPLY, PING_REPLY_OUT, PING_REQUEST, PORT_LIST,
-        SERVER_COMMAND, SERVER_FB_FORMAT, SERVER_INIT, SERVER_RC_MESSAGE, USB_PROFILE_LIST,
-        USER_NOTIFICATION, UTF8_STRING, VIDEO_QUALITY_S2C, VIDEO_SETTINGS_S2C,
-        VIRTUAL_MEDIA_CONFIG, VM_MOUNTS_RESPONSE, VM_SHARE_TABLE, BANDWIDTH_REPLY,
+        ACK_PIXEL_FORMAT, BANDWIDTH_REPLY, BANDWIDTH_REQUEST, CONNECTION_PARAMETERS,
+        FRAMEBUFFER_UPDATE, KEYBOARD_LAYOUT, OSD_STATE, PING_REPLY, PING_REPLY_OUT, PING_REQUEST,
+        PORT_LIST, SERVER_COMMAND, SERVER_FB_FORMAT, SERVER_INIT, SERVER_RC_MESSAGE,
+        USB_PROFILE_LIST, USER_NOTIFICATION, UTF8_STRING, VIDEO_QUALITY_S2C, VIDEO_SETTINGS_S2C,
+        VIRTUAL_MEDIA_CONFIG, VM_MOUNTS_RESPONSE, VM_SHARE_TABLE,
     },
     stream::RfbStream,
 };
 use eyre::{Result, bail};
 use flate2::read::ZlibDecoder;
-use raritan_common::{read_i32, read_u16, read_u32, read_u8};
+use raritan_common::{read_i32, read_u8, read_u16, read_u32};
 use std::io::{Read, Write};
 use tracing::{debug, info, trace, warn};
 
@@ -84,9 +84,7 @@ impl<S: Read + Write> RfbStream<S> {
     }
 
     /// `[18][count][klen,vlen,key,value]*`.
-    pub(crate) fn read_connection_parameters(
-        &mut self,
-    ) -> Result<Vec<(String, String)>> {
+    pub(crate) fn read_connection_parameters(&mut self) -> Result<Vec<(String, String)>> {
         let count = read_u8(&mut self.stream)? as usize;
         let mut params = Vec::with_capacity(count);
         for _ in 0..count {
@@ -114,9 +112,7 @@ impl<S: Read + Write> RfbStream<S> {
     }
 
     /// `[128][unsupported][w][h][pixfmt16][pad*3]`.
-    pub(crate) fn read_server_fb_format(
-        &mut self,
-    ) -> Result<(u16, u16, PixelFormat)> {
+    pub(crate) fn read_server_fb_format(&mut self) -> Result<(u16, u16, PixelFormat)> {
         let unsupported = read_u8(&mut self.stream)?;
         if unsupported != 0 {
             warn!("server reports unsupported framebuffer format");
@@ -323,9 +319,7 @@ impl<S: Read + Write> RfbStream<S> {
                 // Hardware encoding: true size follows.
                 size = read_i32(&mut reader)? as usize;
             }
-            if is_lrle
-                && ((encoding as u32 & 0xf00) != 0 || (encoding as u32 & 0x20000) != 0)
-            {
+            if is_lrle && ((encoding as u32 & 0xf00) != 0 || (encoding as u32 & 0x20000) != 0) {
                 bail!("zlib-streamed framebuffer rects are not supported");
             }
             let mut data = vec![0; size];

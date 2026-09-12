@@ -1,12 +1,19 @@
-//! Client → server keyboard events.
+//! Client → server input events: keyboard, pointer, video settings.
 //!
-//! Wire format (`RfbKeyEventMsgV01_27`, used by the V01_29 handler):
+//! Key events (`RfbKeyEventMsgV01_27`, used by the V01_29 handler):
 //! `[4, 0, keysym:u16-be]` where the keysym is the Eric code with the
 //! high bit set for key-press:
 //! `code = eric & 0x7FFF | (down ? 0x8000 : 0)`.
 //! (Confirmed by call chain — `processKeyPressedInternal` passes
 //! `false`, which sets the bit — and by capture: each tap's first
 //! frame has the bit set.)
+//!
+//! Pointer events (`RfbPointerEventMsgV01_22`):
+//! `[5, buttons, x:u16-be, y:u16-be, wheel:u16-be]`. Button mask is
+//! standard RFB (bit 0 left, 1 middle, 2 right; toggled per press).
+//! Wheel-only events carry `x = y = 0` with the signed rotation in
+//! `wheel` (`consumeMouseWheelEvent`). Verified against a Java capture
+//! of mouse moves plus one left click (`05 01 01 d1 01 b4 00 00`).
 //!
 //! The Eric codes are Raritan's own numbering (from
 //! `KeyTranslatorBase.addKeys` in the Java client, en_US layout), keyed
@@ -15,16 +22,32 @@
 //! "hello world" + Enter: h→0x22, e→0x11, l→0x25, o→0x17, space→0x38,
 //! w→0x10, r→0x12, d→0x1f, enter→0x1b, each as down/up pairs.
 
-use crate::{proto::KEY_EVENT, stream::RfbStream};
+use crate::{
+    proto::{KEY_EVENT, POINTER_EVENT},
+    stream::RfbStream,
+};
 use eyre::{Result, bail};
 use std::io::{Read, Write};
 
-/// Outbound commands for the video worker: key presses/releases and
-/// video-settings actions (calibration, auto-sense).
+/// Outbound commands for the video worker: key presses/releases,
+/// pointer moves/clicks/wheel, and video-settings actions
+/// (calibration, auto-sense).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCommand {
-    Key { eric: u16, down: bool },
-    VideoSettings { setting: u8, value: u16 },
+    Key {
+        eric: u16,
+        down: bool,
+    },
+    Pointer {
+        buttons: u8,
+        x: u16,
+        y: u16,
+        wheel: u16,
+    },
+    VideoSettings {
+        setting: u8,
+        value: u16,
+    },
 }
 
 impl<S: Read + Write> RfbStream<S> {
@@ -36,6 +59,21 @@ impl<S: Read + Write> RfbStream<S> {
         let code = eric | (u16::from(down) << 15);
         self.stream.write_all(&[KEY_EVENT, 0])?;
         self.stream.write_all(&code.to_be_bytes())?;
+        self.stream.flush()?;
+        Ok(())
+    }
+
+    /// Sends one pointer event: button mask, absolute target pixels,
+    /// and wheel rotation (0 for plain moves; wheel-only events use
+    /// `x = y = 0` like the Java client).
+    pub fn write_pointer_event(&mut self, buttons: u8, x: u16, y: u16, wheel: u16) -> Result<()> {
+        let mut message = [0u8; 8];
+        message[0] = POINTER_EVENT;
+        message[1] = buttons;
+        message[2..4].copy_from_slice(&x.to_be_bytes());
+        message[4..6].copy_from_slice(&y.to_be_bytes());
+        message[6..8].copy_from_slice(&wheel.to_be_bytes());
+        self.stream.write_all(&message)?;
         self.stream.flush()?;
         Ok(())
     }
@@ -79,6 +117,12 @@ impl<S: Read + Write> RfbStream<S> {
     pub fn write_command(&mut self, command: VideoCommand) -> Result<()> {
         match command {
             VideoCommand::Key { eric, down } => self.write_key_event(eric, down),
+            VideoCommand::Pointer {
+                buttons,
+                x,
+                y,
+                wheel,
+            } => self.write_pointer_event(buttons, x, y, wheel),
             VideoCommand::VideoSettings { setting, value } => {
                 self.write_video_settings_event(setting, value)
             }
@@ -321,7 +365,10 @@ mod tests {
         let mut stream = RfbStream::new(Cursor::new(Vec::new()));
         stream.write_key_event(0x22, true).unwrap();
         stream.write_key_event(0x22, false).unwrap();
-        assert_eq!(stream.stream.into_inner(), vec![4, 0, 0x80, 0x22, 4, 0, 0, 0x22]);
+        assert_eq!(
+            stream.stream.into_inner(),
+            vec![4, 0, 0x80, 0x22, 4, 0, 0, 0x22]
+        );
     }
 
     #[test]
@@ -338,6 +385,19 @@ mod tests {
             assert_eq!(chunk[1], 0);
             assert!(chunk[2] & 0x80 == 0);
         }
+    }
+
+    #[test]
+    fn pointer_event_bytes_match_java_client() {
+        // Real captured move + left click at (465, 436):
+        // `05 00 00 b5 ...` and `05 01 01 d1 01 b4 00 00`.
+        let mut stream = RfbStream::new(Cursor::new(Vec::new()));
+        stream.write_pointer_event(0, 0xb5, 0, 0).unwrap();
+        stream.write_pointer_event(1, 0x01d1, 0x01b4, 0).unwrap();
+        assert_eq!(
+            stream.stream.into_inner(),
+            vec![5, 0, 0, 0xb5, 0, 0, 0, 0, 5, 1, 1, 0xd1, 1, 0xb4, 0, 0]
+        );
     }
 
     #[test]

@@ -7,14 +7,14 @@ use crate::{
     proto::{
         ASSOCIATED_TAG, AUTH_CAPS, AUTH_METHOD_RDM_SESSION, AUTH_SUCCESSFUL, CHALLENGE_RESPONSE,
         CLIENT_INIT, CONNECTION_PARAMETERS, FRAMEBUFFER_UPDATE, KVM_SWITCH_EVENT, LOGIN,
-        MOUSE_SYNC_EVENT, POINTER_EVENT, SERVER_FB_FORMAT, SERVER_INIT, SESSION_CHALLENGE,
+        MOUSE_SYNC_EVENT, SERVER_FB_FORMAT, SERVER_INIT, SESSION_CHALLENGE,
         SET_CONNECTION_PARAMETER, SET_ENCODINGS, SET_PIXEL_FORMAT, UTF8_STRING,
         VIDEO_SETTINGS_REQUEST, default_encodings,
     },
     stream::RfbStream,
 };
 use eyre::{Result, bail};
-use raritan_common::{read_u8, read_i32};
+use raritan_common::{read_i32, read_u8};
 use std::io::{Read, Write};
 use tracing::{debug, info, trace, warn};
 
@@ -206,29 +206,7 @@ impl<S: Read + Write> RfbStream<S> {
         Ok(())
     }
 
-    pub(crate) fn write_pointer_event(
-        &mut self,
-        buttons: u8,
-        x: u16,
-        y: u16,
-        wheel: u16,
-    ) -> Result<()> {
-        let mut message = [0u8; 8];
-        message[0] = POINTER_EVENT;
-        message[1] = buttons;
-        message[2..4].copy_from_slice(&x.to_be_bytes());
-        message[4..6].copy_from_slice(&y.to_be_bytes());
-        message[6..8].copy_from_slice(&wheel.to_be_bytes());
-        self.stream.write_all(&message)?;
-        self.stream.flush()?;
-        Ok(())
-    }
-
-    pub(crate) fn write_set_connection_parameter(
-        &mut self,
-        name: &str,
-        value: &str,
-    ) -> Result<()> {
+    pub(crate) fn write_set_connection_parameter(&mut self, name: &str, value: &str) -> Result<()> {
         if name.len() > u8::MAX as usize || value.len() > u8::MAX as usize {
             bail!("connection parameter too long");
         }

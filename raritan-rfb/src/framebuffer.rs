@@ -175,9 +175,6 @@ mod tests {
                 PixelFormat::RGB565,
             )
             .unwrap();
-        assert_eq!(
-            framebuffer.rgba,
-            vec![255, 0, 0, 255, 0, 0, 255, 255]
-        );
+        assert_eq!(framebuffer.rgba, vec![255, 0, 0, 255, 0, 0, 255, 255]);
     }
 }
