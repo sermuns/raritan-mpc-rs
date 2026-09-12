@@ -1,6 +1,6 @@
 use eframe::egui;
 use raritan_rdm::{Port, RdmClient};
-use raritan_rfb::{Framebuffer, PixelFormat, eric_code};
+use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
 use raritan_session::{ConnectionConfig, establish_video};
 use std::{
     sync::mpsc::{self, Receiver, Sender},
@@ -40,9 +40,9 @@ struct MpcApp {
     error: Option<String>,
     connection_status: String,
     frames: Option<Receiver<FrameMessage>>,
-    /// Outbound key events (Eric code, pressed?) for the video worker.
-    /// `None` while no video session is running.
-    key_tx: Option<Sender<(u16, bool)>>,
+    /// Outbound commands (key events, calibration, auto-sense) for the
+    /// video worker. `None` while no video session is running.
+    cmd_tx: Option<Sender<VideoCommand>>,
     texture: Option<egui::TextureHandle>,
     framebuffer_size: Option<(u16, u16)>,
 }
@@ -71,7 +71,7 @@ impl MpcApp {
                 error: None,
                 connection_status: "Ready".to_owned(),
                 frames: None,
-                key_tx: None,
+                cmd_tx: None,
                 texture: None,
                 framebuffer_size: None,
             },
@@ -81,7 +81,7 @@ impl MpcApp {
                 error: Some(format!("{error:?}")),
                 connection_status: "Port enumeration failed".to_owned(),
                 frames: None,
-                key_tx: None,
+                cmd_tx: None,
                 texture: None,
                 framebuffer_size: None,
             },
@@ -92,9 +92,9 @@ impl MpcApp {
         let port_id = port.id.clone();
         info!(%port_id, "starting framebuffer worker");
         let (sender, receiver) = mpsc::channel();
-        let (key_sender, key_receiver) = mpsc::channel();
+        let (cmd_sender, cmd_receiver) = mpsc::channel();
         self.frames = Some(receiver);
-        self.key_tx = Some(key_sender);
+        self.cmd_tx = Some(cmd_sender);
         self.texture = None;
         self.framebuffer_size = None;
         self.error = None;
@@ -133,16 +133,24 @@ impl MpcApp {
                 let mut held: Vec<u16> = Vec::new();
                 let result = (|| -> eyre::Result<()> {
                     loop {
-                        while let Ok((eric, down)) = key_receiver.try_recv() {
-                            rfb.write_key_event(eric, down)?;
-                            if down {
-                                if !held.contains(&eric) {
-                                    held.push(eric);
+                        while let Ok(command) = cmd_receiver.try_recv() {
+                            match command {
+                                VideoCommand::Key { eric, down } => {
+                                    rfb.write_key_event(eric, down)?;
+                                    if down {
+                                        if !held.contains(&eric) {
+                                            held.push(eric);
+                                        }
+                                    } else if let Some(index) =
+                                        held.iter().position(|held| *held == eric)
+                                    {
+                                        held.swap_remove(index);
+                                    }
                                 }
-                            } else if let Some(index) =
-                                held.iter().position(|held| *held == eric)
-                            {
-                                held.swap_remove(index);
+                                VideoCommand::VideoSettings { setting, value } => {
+                                    info!(setting, value, "sending video-settings event");
+                                    rfb.write_video_settings_event(setting, value)?;
+                                }
                             }
                         }
                         let update = match rfb.read_message() {
@@ -307,8 +315,8 @@ impl eframe::App for MpcApp {
                     FrameMessage::Error(error) => {
                         warn!(%error, "framebuffer error received by GUI");
                         self.error = Some(error);
-                        // Worker is gone; stop queueing keys for it.
-                        self.key_tx = None;
+                        // Worker is gone; stop queueing commands for it.
+                        self.cmd_tx = None;
                     }
                 }
             }
@@ -335,8 +343,8 @@ impl eframe::App for MpcApp {
         // Forward physical key presses to the KVM target while a video
         // session runs. Text events are deliberately ignored (the Key
         // press/release pair already carries what the target needs).
-        if let Some(tx) = &self.key_tx {
-            let keys: Vec<(u16, bool)> = ui.ctx().input(|input| {
+        if let Some(tx) = &self.cmd_tx {
+            let keys: Vec<VideoCommand> = ui.ctx().input(|input| {
                 input
                     .events
                     .iter()
@@ -344,15 +352,18 @@ impl eframe::App for MpcApp {
                         if let egui::Event::Key { key, pressed, .. } = event {
                             java_key(*key)
                                 .and_then(|(code, location)| eric_code(code, location))
-                                .map(|eric| (eric, *pressed))
+                                .map(|eric| VideoCommand::Key {
+                                    eric,
+                                    down: *pressed,
+                                })
                         } else {
                             None
                         }
                     })
                     .collect()
             });
-            for (eric, down) in keys {
-                let _ = tx.send((eric, down));
+            for command in keys {
+                let _ = tx.send(command);
             }
         }
         egui::Panel::top("header").show(ui, |ui| {
@@ -398,8 +409,38 @@ impl eframe::App for MpcApp {
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(index) = self.selected_port {
                 let port = &self.ports[index];
-                ui.heading(port.name.as_deref().unwrap_or("Selected port"));
-                ui.label(format!("Port ID: {}", port.id));
+                ui.horizontal(|ui| {
+                    ui.heading(port.name.as_deref().unwrap_or("Selected port"));
+                    ui.label(format!("Port ID: {}", port.id));
+                    // Manual video actions, mirroring the Java client's
+                    // Calibrate Color / Auto Sense menu entries. The
+                    // switch auto-calibrates on its own; these are for
+                    // when the picture needs a nudge.
+                    if self.cmd_tx.is_some() {
+                        // Right-align the buttons.
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui.button("Auto sense").clicked()
+                                    && let Some(tx) = &self.cmd_tx
+                                {
+                                    let _ = tx.send(VideoCommand::VideoSettings {
+                                        setting: 18,
+                                        value: 0,
+                                    });
+                                }
+                                if ui.button("Calibrate color").clicked()
+                                    && let Some(tx) = &self.cmd_tx
+                                {
+                                    let _ = tx.send(VideoCommand::VideoSettings {
+                                        setting: 19,
+                                        value: 0,
+                                    });
+                                }
+                            },
+                        );
+                    }
+                });
                 ui.separator();
                 if let Some(texture) = &self.texture {
                     // Scale the framebuffer to fit the remaining panel

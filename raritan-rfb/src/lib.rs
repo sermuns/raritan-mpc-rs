@@ -19,7 +19,7 @@ pub mod transport;
 
 pub use creds::RfbCredentials;
 pub use framebuffer::{Framebuffer, FramebufferRectangle, FramebufferUpdate, PixelFormat};
-pub use input::eric_code;
+pub use input::{VideoCommand, eric_code};
 pub use stream::RfbStream;
 
 #[cfg(test)]

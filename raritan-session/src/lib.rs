@@ -67,7 +67,14 @@ pub fn establish_video(
         warn!(%error, "RDM event session failed; continuing without it");
     }
     info!(%port_id, "connecting RFB session");
-    RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)
+    let mut rfb = RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)?;
+    // Clear any key state stuck down from an earlier session (e.g. a
+    // modifier held while the app lost focus or died): the switch keeps
+    // per-target key state across connections, so only the target can
+    // release it. Releases are no-ops for keys that aren't down.
+    rfb.release_all_keys()?;
+    info!(%port_id, "cleared stuck keys");
+    Ok(rfb)
 }
 
 /// Reads `n` framebuffer updates, applying each to a fresh RGB565

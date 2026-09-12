@@ -19,6 +19,14 @@ use crate::{proto::KEY_EVENT, stream::RfbStream};
 use eyre::{Result, bail};
 use std::io::{Read, Write};
 
+/// Outbound commands for the video worker: key presses/releases and
+/// video-settings actions (calibration, auto-sense).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCommand {
+    Key { eric: u16, down: bool },
+    VideoSettings { setting: u8, value: u16 },
+}
+
 impl<S: Read + Write> RfbStream<S> {
     /// Sends one key press or release for the given Eric code.
     pub fn write_key_event(&mut self, eric: u16, down: bool) -> Result<()> {
@@ -30,6 +38,51 @@ impl<S: Read + Write> RfbStream<S> {
         self.stream.write_all(&code.to_be_bytes())?;
         self.stream.flush()?;
         Ok(())
+    }
+
+    /// Sends a video-settings action (`RfbVideoSettingsC2SMsgV01_22`,
+    /// type 144): `[144, setting, value:u16-be]`. The V01_29 handler
+    /// uses the V01_27 settings table, where 19 = color calibration
+    /// and 18 = auto-sense (`RfbVideoSettingsHandler_V01_27`).
+    pub fn write_video_settings_event(&mut self, setting: u8, value: u16) -> Result<()> {
+        self.stream.write_all(&[144, setting])?;
+        self.stream.write_all(&value.to_be_bytes())?;
+        self.stream.flush()?;
+        Ok(())
+    }
+
+    /// Manual "Calibrate Color" action (Java `calibrateColor()` menu).
+    pub fn request_color_calibration(&mut self) -> Result<()> {
+        self.write_video_settings_event(19, 0)
+    }
+
+    /// Releases every key code (0–137). The switch holds per-target key
+    /// state across connections, so a modifier whose release was lost
+    /// (e.g. app killed or focus switched while held) would otherwise
+    /// stay down forever — even across reconnects and app restarts.
+    /// Releases are no-ops for keys that aren't down (the Java client
+    /// itself sends defensive releases), so this is safe to run on
+    /// every connect.
+    pub fn release_all_keys(&mut self) -> Result<()> {
+        for eric in 0..=137 {
+            self.write_key_event(eric, false)?;
+        }
+        Ok(())
+    }
+
+    /// Manual "Auto Sense" action (Java `autoSenseVideo()` menu).
+    pub fn request_video_auto_sense(&mut self) -> Result<()> {
+        self.write_video_settings_event(18, 0)
+    }
+
+    /// Dispatches one [`VideoCommand`] from the UI thread.
+    pub fn write_command(&mut self, command: VideoCommand) -> Result<()> {
+        match command {
+            VideoCommand::Key { eric, down } => self.write_key_event(eric, down),
+            VideoCommand::VideoSettings { setting, value } => {
+                self.write_video_settings_event(setting, value)
+            }
+        }
     }
 }
 
@@ -269,5 +322,34 @@ mod tests {
         stream.write_key_event(0x22, true).unwrap();
         stream.write_key_event(0x22, false).unwrap();
         assert_eq!(stream.stream.into_inner(), vec![4, 0, 0x80, 0x22, 4, 0, 0, 0x22]);
+    }
+
+    #[test]
+    fn release_all_clears_every_code() {
+        let mut stream = RfbStream::new(Cursor::new(Vec::new()));
+        stream.release_all_keys().unwrap();
+        let bytes = stream.stream.into_inner();
+        assert_eq!(bytes.len(), 138 * 4);
+        // Every message is a release: [4, 0, hi, lo] with top bit clear.
+        assert_eq!(&bytes[0..4], &[4, 0, 0, 0]);
+        assert_eq!(&bytes[bytes.len() - 4..], &[4, 0, 0, 137]);
+        for chunk in bytes.chunks_exact(4) {
+            assert_eq!(chunk[0], 4);
+            assert_eq!(chunk[1], 0);
+            assert!(chunk[2] & 0x80 == 0);
+        }
+    }
+
+    #[test]
+    fn calibration_event_bytes_match_java_client() {
+        // `RfbVideoSettingsHandler_V01_27.requestVideoColorCalibration`
+        // → `writeVideoSettingsEvent(19, 0)` → `[144, 19, 0, 0]`.
+        let mut stream = RfbStream::new(Cursor::new(Vec::new()));
+        stream.request_color_calibration().unwrap();
+        stream.request_video_auto_sense().unwrap();
+        assert_eq!(
+            stream.stream.into_inner(),
+            vec![144, 19, 0, 0, 144, 18, 0, 0]
+        );
     }
 }

@@ -69,6 +69,17 @@ the server start sending frames.
   "hello world" + Enter (`input.rs::eric_code`, `write_key_event`).
 - Pointer event (type 5), mouse sync (134), KVM switch (137) as in the
   session-init tail above.
+- Video-settings action (`RfbVideoSettingsC2SMsgV01_22`, type 144):
+  `[144, setting, value:u16-be]`. The V01_29 handler uses the V01_27
+  table: 19 = color calibration, 18 = auto-sense. These are the manual
+  menu actions only — the client never sends them automatically, not
+  even on resolution change (`processServerFBFormat` just requests a
+  full update). The switch auto-calibrates on its own and bakes any
+  "calibration in progress" notice into the video itself.
+- On every connect the client releases all key codes 0–137: the switch
+  keeps per-target key state across connections, so a modifier whose
+  release was lost (focus switch, killed app) would otherwise stay
+  down forever. Releases are no-ops for keys that aren't down.
 
 ## Steady state
 
