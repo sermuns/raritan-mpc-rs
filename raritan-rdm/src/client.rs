@@ -35,6 +35,8 @@ impl RdmClient {
     fn tcp_connect(host: &str) -> eyre::Result<TcpStream> {
         let stream = TcpStream::connect((host, DEFAULT_RDM_PORT))
             .wrap_err_with(|| format!("connecting to {host}:{DEFAULT_RDM_PORT}"))?;
+        // Small request/response frames: skip Nagle's ACK-wait delay.
+        stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(RDM_READ_TIMEOUT))?;
         Ok(stream)
     }

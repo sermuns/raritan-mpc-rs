@@ -18,6 +18,10 @@ impl RfbStream<TcpStream> {
     pub fn connect(host: &str) -> Result<Self> {
         let stream = TcpStream::connect((host, DEFAULT_RFB_PORT))
             .wrap_err_with(|| format!("connecting to {host}:{DEFAULT_RFB_PORT}"))?;
+        // Latency-sensitive channel (4-byte key events, 10-byte update
+        // requests): disable Nagle so small writes go out immediately
+        // instead of waiting up to ~200 ms for delayed ACKs.
+        stream.set_nodelay(true)?;
         Ok(Self::new(stream))
     }
 
@@ -60,6 +64,7 @@ impl RfbStream<TcpStream> {
         info!(%host, "connecting to RFP CSC channel");
         let mut socket = TcpStream::connect((host, DEFAULT_RFB_PORT))
             .wrap_err_with(|| format!("connecting to {host}:{DEFAULT_RFB_PORT}"))?;
+        socket.set_nodelay(true)?;
         let greeting = read_frame(&mut socket)?;
         debug!(length = greeting.len(), "received RFP CSC greeting");
         if !greeting.starts_with(b"<CSC") {

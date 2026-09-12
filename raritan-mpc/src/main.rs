@@ -120,7 +120,11 @@ impl MpcApp {
                 let format = PixelFormat::RGB565;
                 let mut framebuffer = Framebuffer::new(width, height);
                 // Short read timeout so queued key events are flushed
-                // promptly even when the server sends nothing.
+                // promptly even when the server sends nothing. NOTE: this
+                // must stay generous — firing mid-framebuffer-update
+                // discards partial bytes and desyncs the stream (20 ms
+                // did exactly that over the tunnel: freeze after a few
+                // frames, then "failed to fill whole buffer").
                 rfb.set_read_timeout(Some(Duration::from_millis(100)))?;
                 // Eric codes currently held down on the target. On exit
                 // every held key is released so a dropped connection can
@@ -174,7 +178,7 @@ impl MpcApp {
 }
 
 /// True when the error is just the worker's read timeout expiring
-/// (no server data within 100 ms), as opposed to a real failure.
+/// (no server data within the poll window), as opposed to a real failure.
 fn is_read_timeout(error: &eyre::Report) -> bool {
     error
         .downcast_ref::<std::io::Error>()
