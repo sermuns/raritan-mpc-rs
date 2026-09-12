@@ -3,6 +3,7 @@
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use eyre::{Context, Result, bail};
+use rc4::{KeyInit, Rc4, StreamCipher};
 
 pub fn encode_base64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
@@ -44,28 +45,19 @@ pub fn current_time_millis() -> i32 {
         .as_millis() as i32
 }
 
+/// One-shot RC4 for the `CSC_Test2` challenge/response.
+///
+/// Delegates to the [`rc4`] crate (legacy-interop cipher, sync API).
+/// Keys must be 1–256 bytes; empty keys are rejected explicitly since the
+/// switch's session keys are always non-empty.
 pub fn rc4(key: &[u8], input: &[u8]) -> Result<Vec<u8>> {
     if key.is_empty() {
         bail!("empty CSC session key");
     }
-    let mut state = [0u8; 256];
-    for (index, byte) in state.iter_mut().enumerate() {
-        *byte = index as u8;
-    }
-    let mut j = 0usize;
-    for i in 0..256 {
-        j = (j + usize::from(state[i]) + usize::from(key[i % key.len()])) & 255;
-        state.swap(i, j);
-    }
-    let mut i = 0usize;
-    j = 0;
-    let mut output = Vec::with_capacity(input.len());
-    for byte in input {
-        i = (i + 1) & 255;
-        j = (j + usize::from(state[i])) & 255;
-        state.swap(i, j);
-        output.push(*byte ^ state[(usize::from(state[i]) + usize::from(state[j])) & 255]);
-    }
+    let mut cipher =
+        Rc4::new_from_slice(key).map_err(|error| eyre::eyre!("invalid RC4 key: {error}"))?;
+    let mut output = input.to_vec();
+    cipher.apply_keystream(&mut output);
     Ok(output)
 }
 
@@ -80,6 +72,16 @@ mod tests {
         let cipher = rc4(key, plain).unwrap();
         assert_ne!(cipher, plain);
         assert_eq!(rc4(key, &cipher).unwrap(), plain);
+    }
+
+    #[test]
+    fn matches_standard_test_vector() {
+        // RFC-style vector from the `rc4` crate docs.
+        let cipher = rc4(b"Key", b"Plaintext").unwrap();
+        assert_eq!(
+            cipher,
+            [0xBB, 0xF3, 0x16, 0xE8, 0xD9, 0x40, 0xAF, 0x0A, 0xD3]
+        );
     }
 
     #[test]

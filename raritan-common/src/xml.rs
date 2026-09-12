@@ -9,13 +9,12 @@ pub fn xml_attribute(xml: &str, name: &str) -> Option<String> {
     Some(xml[start..end].to_owned())
 }
 
+/// XML-escapes a value for embedding in CSC request documents.
+///
+/// Delegates to [`quick_xml::escape::escape`] (already a workspace
+/// dependency) so there is exactly one escaping implementation.
 pub fn escape_xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\'', "&apos;")
+    quick_xml::escape::escape(value).into_owned()
 }
 
 #[cfg(test)]
