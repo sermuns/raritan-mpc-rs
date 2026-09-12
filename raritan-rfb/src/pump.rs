@@ -5,8 +5,8 @@ use crate::{
     framebuffer::{FramebufferRectangle, FramebufferUpdate, PixelFormat},
     proto::{
         ACK_PIXEL_FORMAT, BANDWIDTH_REPLY, BANDWIDTH_REQUEST, CONNECTION_PARAMETERS,
-        FRAMEBUFFER_UPDATE, KEYBOARD_LAYOUT, OSD_STATE, PING_REPLY, PING_REPLY_OUT, PING_REQUEST,
-        PORT_LIST, SERVER_COMMAND, SERVER_FB_FORMAT, SERVER_INIT, SERVER_RC_MESSAGE,
+        FIX_COLOUR_MAP, FRAMEBUFFER_UPDATE, KEYBOARD_LAYOUT, OSD_STATE, PING_REPLY, PING_REPLY_OUT,
+        PING_REQUEST, PORT_LIST, SERVER_COMMAND, SERVER_FB_FORMAT, SERVER_INIT, SERVER_RC_MESSAGE,
         USB_PROFILE_LIST, USER_NOTIFICATION, UTF8_STRING, VIDEO_QUALITY_S2C, VIDEO_SETTINGS_S2C,
         VIRTUAL_MEDIA_CONFIG, VM_MOUNTS_RESPONSE, VM_SHARE_TABLE,
     },
@@ -149,10 +149,14 @@ impl<S: Read + Write> RfbStream<S> {
     }
 
     /// Consume and discard any server message that carries no video data,
-    /// keeping the stream aligned.
+    /// keeping the stream aligned. Mirrors the `process*` readers in
+    /// `RfbHandler`/`RfbHandlerV01_29` (which throws on type 1 — we
+    /// deliberately survive it: palettized reboot screens must not kill
+    /// a true-color session).
     pub(crate) fn skip_server_message(&mut self, message_type: u8) -> Result<()> {
         trace!(message_type, "skipping RFB server message");
         match message_type {
+            FIX_COLOUR_MAP => self.skip_colour_map()?,
             USER_NOTIFICATION => {
                 let mut rest = [0; 7];
                 self.stream.read_exact(&mut rest)?;
@@ -248,6 +252,22 @@ impl<S: Read + Write> RfbStream<S> {
         let len = read_u16(&mut self.stream)? as usize;
         let mut bytes = vec![0; len];
         self.stream.read_exact(&mut bytes)?;
+        Ok(())
+    }
+
+    /// Standard `FixColourMapEntries`: `[1][pad][first:u16][count:u16]`
+    /// followed by `count` RGB triples. Only meaningful for palettized
+    /// modes; we always run true-color, so the entries are discarded.
+    fn skip_colour_map(&mut self) -> Result<()> {
+        let _pad = read_u8(&mut self.stream)?;
+        let first = read_u16(&mut self.stream)?;
+        let count = read_u16(&mut self.stream)? as usize;
+        debug!(
+            first,
+            count, "received colour map (true-color session; ignoring)"
+        );
+        let mut entries = vec![0; count * 6];
+        self.stream.read_exact(&mut entries)?;
         Ok(())
     }
 

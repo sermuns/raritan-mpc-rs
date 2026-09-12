@@ -95,12 +95,18 @@ the server start sending frames.
   requests (`[149,0,0,0,serial]`), absorbs ping replies, performs the
   bandwidth handshake (`[151,1]` … read … `[151,2]`), adopts late `128`
   format changes, skips everything else.
+- Late `128` changes are real: on session start the target can switch
+  from text mode (720×400) to graphics (1024×768), verified by replaying
+  a Rack 10 capture (211 clipped rects without a resize). Consumers
+  must recreate their pixel buffer *and* display texture when
+  `framebuffer_size()` changes, or the picture crops/misaligns.
 
 ## Message catalog (server → client)
 
 | Type | Name | Layout after type byte |
 |---|---|---|
 | 0 | FramebufferUpdate | `[flags][count:u16][size:u32]` + optional 8 B timestamp (flags&1) + blob (zlib iff flags&4); rects: `[x,y,w,h:u16][enc:i32][size:u32][data]` |
+| 1 | FixColourMapEntries | `[pad][first:u16][count:u16]` + `count`×`[r,g,b:u16]`; sent when the target drops to a palettized mode (e.g. reboot into BIOS). We run true-color, so entries are skipped — the Java client throws here, we survive |
 | 3 | UserNotification | `[kind][pad:u16][code:i32]` |
 | 4 | PortList | `[pad][count:u16]` + per port `[kvm,vm,idx:u16,nlen:u16,vlen:u16,name,value]` |
 | 5 | ServerInit | `[pad×3][server_id:i32]` |

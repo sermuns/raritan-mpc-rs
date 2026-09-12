@@ -34,7 +34,8 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
     ports
         .iter()
         .find(|port| {
-            port.index.is_some_and(|index| index.to_string() == selector)
+            port.index
+                .is_some_and(|index| index.to_string() == selector)
                 || port.id == selector
                 || port.id.ends_with(selector)
                 || port.name.as_deref() == Some(selector)
@@ -93,6 +94,16 @@ pub fn capture_frames(
     let mut total_rects = 0usize;
     for i in 0..n {
         let update = rfb.read_message()?;
+        // The switch can change resolutions mid-session (text mode ↔
+        // graphics on session start): a late 128 adopts new dimensions,
+        // and the pixel buffer must follow or rects clip/misalign.
+        let (width, height) = rfb
+            .framebuffer_size()
+            .ok_or_eyre("framebuffer dimensions lost")?;
+        if framebuffer.width != width || framebuffer.height != height {
+            info!(width, height, "framebuffer resized; recreating buffer");
+            framebuffer = Framebuffer::new(width, height);
+        }
         for rect in &update.rectangles {
             seen_encodings.insert(rect.encoding);
         }

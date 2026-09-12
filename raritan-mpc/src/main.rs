@@ -14,6 +14,10 @@ const HOST: &str = "192.168.42.10";
 const USER: &str = "admin";
 const PASSWORD: &str = "admin";
 
+/// Video sessions attempted per port selection before the worker
+/// surfaces an error (initial try + retries with backoff).
+const MAX_VIDEO_ATTEMPTS: u32 = 4;
+
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -137,97 +141,33 @@ impl MpcApp {
         self.error = None;
         self.connection_status = "Starting framebuffer worker".to_owned();
         thread::spawn(move || {
-            let result = (|| -> eyre::Result<()> {
-                let status = |message: &str| {
-                    let _ = sender.send(FrameMessage::Status(message.to_owned()));
-                    info!(%message, "framebuffer connection stage");
-                };
-                status("Connecting to RDM");
-                info!(%port_id, "connecting video session");
-                // NOTE: the TR video-stream grant (cmd 55) is intentionally
-                // skipped: the switch never answers it, while RFB carries
-                // its own KVM-switch event and streams fine without it.
-                // `establish_video` also holds the RDM event session.
-                let config = ConnectionConfig::new(HOST, USER, PASSWORD);
-                let mut rfb = establish_video(&config, &port_id)?;
-                status("RFB connected; waiting for framebuffer");
-                let (width, height) = rfb
-                    .framebuffer_size()
-                    .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
-                let format = PixelFormat::RGB565;
-                let mut framebuffer = Framebuffer::new(width, height);
-                // Short read timeout so queued key events are flushed
-                // promptly even when the server sends nothing. NOTE: this
-                // must stay generous — firing mid-framebuffer-update
-                // discards partial bytes and desyncs the stream (20 ms
-                // did exactly that over the tunnel: freeze after a few
-                // frames, then "failed to fill whole buffer").
-                rfb.set_read_timeout(Some(Duration::from_millis(100)))?;
-                // Eric codes currently held down on the target. On exit
-                // every held key is released so a dropped connection can
-                // never leave the target with a key stuck down (which the
-                // VM would repeat forever).
-                let mut held: Vec<u16> = Vec::new();
-                let result = (|| -> eyre::Result<()> {
-                    loop {
-                        while let Ok(command) = cmd_receiver.try_recv() {
-                            match command {
-                                VideoCommand::Key { eric, down } => {
-                                    rfb.write_key_event(eric, down)?;
-                                    if down {
-                                        if !held.contains(&eric) {
-                                            held.push(eric);
-                                        }
-                                    } else if let Some(index) =
-                                        held.iter().position(|held| *held == eric)
-                                    {
-                                        held.swap_remove(index);
-                                    }
-                                }
-                                VideoCommand::VideoSettings { setting, value } => {
-                                    info!(setting, value, "sending video-settings event");
-                                    rfb.write_video_settings_event(setting, value)?;
-                                }
-                                VideoCommand::Pointer {
-                                    buttons,
-                                    x,
-                                    y,
-                                    wheel,
-                                } => {
-                                    tracing::trace!(buttons, x, y, wheel, "sending pointer event");
-                                    rfb.write_pointer_event(buttons, x, y, wheel)?;
-                                }
-                            }
+            let config = ConnectionConfig::new(HOST, USER, PASSWORD);
+            // The pump only exits on error, so a session either runs
+            // forever or fails into a retry with backoff. The reboot
+            // case (colormap/mode switches) is survived inline; these
+            // retries cover hard drops (switch failover, network blips).
+            for attempt in 1..=MAX_VIDEO_ATTEMPTS {
+                // Drop input queued while disconnected so a reconnect
+                // doesn't replay a burst of stale presses and moves.
+                while cmd_receiver.try_recv().is_ok() {}
+                match run_video_session(&config, &port_id, &sender, &cmd_receiver) {
+                    Ok(()) => return,
+                    Err(error) => {
+                        error!(%error, attempt, "video session failed");
+                        if attempt < MAX_VIDEO_ATTEMPTS {
+                            let wait = Duration::from_secs(1 << attempt.min(3));
+                            let message = format!(
+                                "Connection lost — retrying ({attempt}/{MAX_VIDEO_ATTEMPTS})"
+                            );
+                            info!(%message, wait_secs = wait.as_secs());
+                            let _ = sender.send(FrameMessage::Status(message));
+                            thread::sleep(wait);
+                        } else {
+                            error!(%error, "framebuffer worker stopped");
+                            let _ = sender.send(FrameMessage::Error(format!("{error:?}")));
                         }
-                        let update = match rfb.read_message() {
-                            Ok(update) => update,
-                            Err(error) if is_read_timeout(&error) => continue,
-                            Err(error) => return Err(error),
-                        };
-                        info!(
-                            rectangles = update.rectangles.len(),
-                            flags = update.flags,
-                            "decoded framebuffer update"
-                        );
-                        framebuffer.apply_update(&update, format)?;
-                        sender.send(FrameMessage::Frame {
-                            width,
-                            height,
-                            rgba: framebuffer.rgba.clone(),
-                        })?;
-                        rfb.request_framebuffer_update(true)?;
                     }
-                })();
-                for eric in held {
-                    let _ = rfb.write_key_event(eric, false);
                 }
-                // Release any held mouse buttons for the same reason.
-                let _ = rfb.write_pointer_event(0, 0, 0, 0);
-                result
-            })();
-            if let Err(error) = result {
-                error!(%error, "framebuffer worker stopped");
-                let _ = sender.send(FrameMessage::Error(format!("{error:?}")));
             }
         });
     }
@@ -382,6 +322,107 @@ impl MpcApp {
         }
         commands
     }
+}
+
+/// One video session: RDM login, RFB handshake, then the pump loop
+/// until the first hard error. Returns `Ok` only if the loop ever
+/// exits cleanly (in practice it runs until it fails).
+fn run_video_session(
+    config: &ConnectionConfig,
+    port_id: &str,
+    sender: &mpsc::Sender<FrameMessage>,
+    cmd_receiver: &mpsc::Receiver<VideoCommand>,
+) -> eyre::Result<()> {
+    let status = |message: &str| {
+        let _ = sender.send(FrameMessage::Status(message.to_owned()));
+        info!(%message, "framebuffer connection stage");
+    };
+    status("Connecting to RDM");
+    info!(%port_id, "connecting video session");
+    // NOTE: the TR video-stream grant (cmd 55) is intentionally
+    // skipped: the switch never answers it, while RFB carries
+    // its own KVM-switch event and streams fine without it.
+    // `establish_video` also holds the RDM event session.
+    let mut rfb = establish_video(config, port_id)?;
+    status("RFB connected; waiting for framebuffer");
+    let (width, height) = rfb
+        .framebuffer_size()
+        .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
+    let format = PixelFormat::RGB565;
+    let mut framebuffer = Framebuffer::new(width, height);
+    // Short read timeout so queued input events are flushed promptly
+    // even when the server sends nothing. NOTE: this must stay
+    // generous — firing mid-framebuffer-update discards partial bytes
+    // and desyncs the stream (20 ms did exactly that over the tunnel:
+    // freeze after a few frames, then "failed to fill whole buffer").
+    rfb.set_read_timeout(Some(Duration::from_millis(100)))?;
+    // Eric codes currently held down on the target. On exit every held
+    // key is released so a dropped connection can never leave the
+    // target with a key stuck down (which the VM would repeat forever).
+    let mut held: Vec<u16> = Vec::new();
+    let result = (|| -> eyre::Result<()> {
+        loop {
+            while let Ok(command) = cmd_receiver.try_recv() {
+                match command {
+                    VideoCommand::Key { eric, down } => {
+                        rfb.write_key_event(eric, down)?;
+                        if down {
+                            if !held.contains(&eric) {
+                                held.push(eric);
+                            }
+                        } else if let Some(index) = held.iter().position(|held| *held == eric) {
+                            held.swap_remove(index);
+                        }
+                    }
+                    VideoCommand::VideoSettings { setting, value } => {
+                        info!(setting, value, "sending video-settings event");
+                        rfb.write_video_settings_event(setting, value)?;
+                    }
+                    VideoCommand::Pointer {
+                        buttons,
+                        x,
+                        y,
+                        wheel,
+                    } => {
+                        tracing::trace!(buttons, x, y, wheel, "sending pointer event");
+                        rfb.write_pointer_event(buttons, x, y, wheel)?;
+                    }
+                }
+            }
+            let update = match rfb.read_message() {
+                Ok(update) => update,
+                Err(error) if is_read_timeout(&error) => continue,
+                Err(error) => return Err(error),
+            };
+            // Late 128 format changes (text mode ↔ graphics on session
+            // start) resize the stream: recreate the pixel buffer or
+            // rects clip and the picture misaligns.
+            if let Some((width, height)) = rfb.framebuffer_size()
+                && (framebuffer.width != width || framebuffer.height != height)
+            {
+                info!(width, height, "framebuffer resized; recreating buffer");
+                framebuffer = Framebuffer::new(width, height);
+            }
+            info!(
+                rectangles = update.rectangles.len(),
+                flags = update.flags,
+                "decoded framebuffer update"
+            );
+            framebuffer.apply_update(&update, format)?;
+            sender.send(FrameMessage::Frame {
+                width: framebuffer.width,
+                height: framebuffer.height,
+                rgba: framebuffer.rgba.clone(),
+            })?;
+            rfb.request_framebuffer_update(true)?;
+        }
+    })();
+    for eric in held {
+        let _ = rfb.write_key_event(eric, false);
+    }
+    // Release any held mouse buttons for the same reason.
+    let _ = rfb.write_pointer_event(0, 0, 0, 0);
+    result
 }
 
 /// True when the error is just the worker's read timeout expiring
@@ -571,6 +612,12 @@ impl eframe::App for MpcApp {
                 }
             }
             if let Some((width, height, rgba)) = latest_frame {
+                // A late resolution change resizes the stream: drop the
+                // old texture so it is recreated at the new dimensions
+                // instead of stretching the new pixels into it.
+                if self.framebuffer_size != Some((width, height)) {
+                    self.texture = None;
+                }
                 self.framebuffer_size = Some((width, height));
                 let image = egui::ColorImage::from_rgba_unmultiplied(
                     [width as usize, height as usize],
@@ -755,28 +802,26 @@ impl eframe::App for MpcApp {
                     ui.colored_label(egui::Color32::RED, error);
                 }
                 ui.separator();
-                // Confirmation dialog for the Secure Attention Sequence.
-                // Rendered as a floating window so it can't be missed.
+                // Confirmation dialog for the Secure Attention Sequence,
+                // centered with a backdrop blocking the rest of the UI.
                 if self.confirm_cad {
-                    egui::Window::new("Send Ctrl+Alt+Delete?")
-                        .collapsible(false)
-                        .resizable(false)
-                        .show(ui.ctx(), |ui| {
-                            ui.label("Send Ctrl+Alt+Delete to the selected port?");
-                            ui.horizontal(|ui| {
-                                if ui.button("Yes").clicked() {
-                                    if let Some(tx) = &self.cmd_tx {
-                                        for command in cad_sequence() {
-                                            let _ = tx.send(command);
-                                        }
+                    egui::containers::Modal::new("cad_confirm".into()).show(ui.ctx(), |ui| {
+                        ui.heading("Send Ctrl+Alt+Delete?");
+                        ui.label("Send Ctrl+Alt+Delete to the selected port?");
+                        ui.horizontal(|ui| {
+                            if ui.button("Yes").clicked() {
+                                if let Some(tx) = &self.cmd_tx {
+                                    for command in cad_sequence() {
+                                        let _ = tx.send(command);
                                     }
-                                    self.confirm_cad = false;
                                 }
-                                if ui.button("No").clicked() {
-                                    self.confirm_cad = false;
-                                }
-                            });
+                                self.confirm_cad = false;
+                            }
+                            if ui.button("No").clicked() {
+                                self.confirm_cad = false;
+                            }
                         });
+                    });
                 }
                 if let Some(texture) = &self.texture {
                     // Scale the framebuffer to fit the remaining panel

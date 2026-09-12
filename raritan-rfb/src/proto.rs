@@ -2,6 +2,10 @@
 
 // Server → client.
 pub const FRAMEBUFFER_UPDATE: u8 = 0;
+/// Standard `FixColourMapEntries` (palettized modes, e.g. target BIOS
+/// screens during reboot). We always run true-color RGB565, so the map
+/// is inapplicable — it is parsed and skipped to stay aligned.
+pub const FIX_COLOUR_MAP: u8 = 1;
 pub const USER_NOTIFICATION: u8 = 3;
 pub const PORT_LIST: u8 = 4;
 pub const SERVER_INIT: u8 = 5;

@@ -49,6 +49,26 @@ mod tests {
         assert_eq!(update.rectangles[1].width, 4);
     }
 
+    /// A `FixColourMapEntries` (sent when the target drops to a
+    /// palettized mode, e.g. during reboot) must not kill the pump:
+    /// it is skipped and the next update still parses.
+    #[test]
+    fn pump_survives_colour_map() {
+        let mut server = vec![1, 0]; // type 1 + pad
+        server.extend_from_slice(&0u16.to_be_bytes()); // first
+        server.extend_from_slice(&2u16.to_be_bytes()); // count
+        server.extend_from_slice(&[0xFF, 0xFF, 0, 0, 0, 0]); // white
+        server.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // black
+        // Empty framebuffer update: type + flags=0, 0 rects, 0 bytes.
+        server.extend_from_slice(&[0, 0, 0, 0]);
+        server.extend_from_slice(&0u32.to_be_bytes());
+
+        let mut stream = RfbStream::new(Cursor::new(server));
+        let update = stream.read_message().unwrap();
+        assert_eq!(update.flags, 0);
+        assert!(update.rectangles.is_empty());
+    }
+
     struct FakeStream {
         read: Cursor<Vec<u8>>,
         written: Vec<u8>,
