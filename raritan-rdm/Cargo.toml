@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 eyre.workspace = true
 openssl.workspace = true
-quick-xml = { version = "0.42", features = ["serialize"] }
-serde = { version = "1", features = ["derive"] }
+quick-xml.workspace = true
+serde.workspace = true
 tracing.workspace = true
 raritan-common.workspace = true

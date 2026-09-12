@@ -5,9 +5,9 @@ edition.workspace = true
 
 [dependencies]
 eyre.workspace = true
-eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+eframe.workspace = true
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber.workspace = true
 raritan-rdm.workspace = true
 raritan-rfb.workspace = true
 raritan-session.workspace = true

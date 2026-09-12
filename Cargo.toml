@@ -11,7 +11,15 @@ edition = "2024"
 eyre = "0.6"
 openssl = "0.10"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 base64 = "0.22"
+flate2 = "1"
+rc4 = "0.2"
+quick-xml = { version = "0.42", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6"
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 raritan-common = { path = "raritan-common" }
 raritan-rdm = { path = "raritan-rdm" }
 raritan-rfb = { path = "raritan-rfb" }

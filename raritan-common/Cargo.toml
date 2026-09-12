@@ -8,5 +8,5 @@ eyre.workspace = true
 base64.workspace = true
 openssl.workspace = true
 tracing.workspace = true
-quick-xml = "0.42"
-rc4 = "0.2"
+quick-xml.workspace = true
+rc4.workspace = true
