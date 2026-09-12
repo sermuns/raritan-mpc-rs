@@ -1,6 +1,9 @@
 pub mod client;
+pub mod event;
+pub mod handshake;
 pub mod model;
-mod protocol;
+pub mod protocol;
+pub mod tr;
 
 pub use client::RdmClient;
 pub use model::Port;

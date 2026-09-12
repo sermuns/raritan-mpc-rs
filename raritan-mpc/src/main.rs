@@ -1,6 +1,7 @@
 use eframe::egui;
 use raritan_rdm::{Port, RdmClient};
-use raritan_rfb::{Framebuffer, RfbStream};
+use raritan_rfb::{Framebuffer, PixelFormat};
+use raritan_session::{ConnectionConfig, establish_video};
 use std::{
     sync::mpsc::{self, Receiver},
     thread,
@@ -97,29 +98,18 @@ impl MpcApp {
                     info!(%message, "framebuffer connection stage");
                 };
                 status("Connecting to RDM");
-                info!(%port_id, "connecting RDM worker session");
-                let mut rdm = RdmClient::connect(HOST, USER, PASSWORD)?;
-                status("Enumerating KVM ports");
-                rdm.enumerate_ports()?;
-                let (session_id, session_key) = rdm.session_credentials()?;
-                let session_id = session_id.to_owned();
-                let session_key = session_key.to_owned();
+                info!(%port_id, "connecting video session");
                 // NOTE: the TR video-stream grant (cmd 55) is intentionally
                 // skipped: the switch never answers it, while RFB carries
                 // its own KVM-switch event and streams fine without it.
-                // Hold the RDM event session like the Java client does.
-                if let Err(error) = rdm.open_event_session(&session_id, &session_key) {
-                    warn!(%error, "RDM event session failed; continuing without it");
-                }
-                status("Connecting to RFB");
-                info!(%port_id, "connecting RFB worker session");
-                let mut rfb =
-                    RfbStream::connect_raritan(HOST, &session_id, &session_key, &port_id)?;
+                // `establish_video` also holds the RDM event session.
+                let config = ConnectionConfig::new(HOST, USER, PASSWORD);
+                let mut rfb = establish_video(&config, &port_id)?;
                 status("RFB connected; waiting for framebuffer");
                 let (width, height) = rfb
                     .framebuffer_size()
                     .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
-                let format = raritan_rfb::PixelFormat::RGB565;
+                let format = PixelFormat::RGB565;
                 let mut framebuffer = Framebuffer::new(width, height);
                 loop {
                     let update = rfb.read_message()?;

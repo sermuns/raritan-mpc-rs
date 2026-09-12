@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["raritan-cli", "raritan-mpc", "raritan-rdm", "raritan-rfb"]
+members = ["raritan-cli", "raritan-mpc", "raritan-rdm", "raritan-rfb", "raritan-common", "raritan-session"]
 default-members = ["raritan-mpc"]
 
 [workspace.package]
@@ -12,3 +12,7 @@ eyre = "0.6"
 openssl = "0.10"
 tracing = "0.1"
 base64 = "0.22"
+raritan-common = { path = "raritan-common" }
+raritan-rdm = { path = "raritan-rdm" }
+raritan-rfb = { path = "raritan-rfb" }
+raritan-session = { path = "raritan-session" }

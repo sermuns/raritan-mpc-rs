@@ -1,7 +1,6 @@
 use clap::Parser;
 use raritan_rdm::RdmClient;
-use raritan_rfb::{Framebuffer, PixelFormat, RfbStream};
-use std::collections::HashSet;
+use raritan_session::{ConnectionConfig, capture_frames, encode_ppm, establish_video, find_port, is_black};
 use tracing::{info, warn};
 
 const DEFAULT_USER: &str = "admin";
@@ -53,19 +52,7 @@ fn main() -> color_eyre::Result<()> {
     let mut client = RdmClient::connect(&args.host, &args.user, &args.password)?;
 
     if let Some(path) = &args.dump_xml {
-        let mut xml = client.raw_inventory()?;
-        for device in ["D_000d5d065096", "D_000d5d065095"] {
-            xml.push_str(&format!("\n<!-- {device} -->\n"));
-            xml.push_str(&client.raw_device(device)?);
-        }
-        for query in [
-            "<Database><Get><Select>/System/Device[@Type='IP-Reach']/DeviceCapabilities</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>",
-            "<Database><Get><Select>/System/Device</Select><Nodes> Device </Nodes><SubNodes> Name SerialNo @id @Type @Model @BM @BaseDevice @CalibrationSpeed @ProductCode</SubNodes></Get></Database>",
-        ] {
-            xml.push_str(&format!("\n<!-- {query} -->\n"));
-            xml.push_str(&client.database_query(query)?);
-        }
-        std::fs::write(path, xml)?;
+        dump_inventory_xml(&mut client, path)?;
     }
 
     let ports = client.enumerate_ports()?;
@@ -84,74 +71,40 @@ fn main() -> color_eyre::Result<()> {
     let Some(selector) = args.video else {
         return Ok(());
     };
-    let port = ports
-        .iter()
-        .find(|port| {
-            port.index.is_some_and(|index| index.to_string() == selector)
-                || port.id == selector
-                || port.id.ends_with(&selector)
-                || port.name.as_deref() == Some(&selector)
-                || port
-                    .name
-                    .as_deref()
-                    .is_some_and(|name| name.contains(&selector))
-        })
-        .ok_or_else(|| color_eyre::eyre::eyre!("no port matches {selector:?}"))?;
+    let port = find_port(&ports, &selector)?;
     info!(id = %port.id, name = ?port.name, "selected port for headless capture");
-
     let port_id = port.id.clone();
+    drop(client);
 
-    // Fresh RDM session for the video flow; the listing session above
-    // already fetched the RDM session credentials. NOTE: the TR
-    // video-stream grant (cmd 55) is intentionally skipped: the switch
-    // never answers it, while RFB carries its own KVM-switch event and
-    // streams fine without it.
-    let (session_id, session_key) = client
-        .session_credentials()
-        .map(|(id, key)| (id.to_owned(), key.to_owned()))?;
-    let rdm = RdmClient::connect(&args.host, &args.user, &args.password)?;
-    // The Java client always holds the RDMEvent referral session while
-    // connecting video; keep it open for the whole capture.
-    if let Err(error) = rdm.open_event_session(&session_id, &session_key) {
-        warn!(%error, "RDM event session failed; continuing without it");
-    }
-
-    let mut rfb = RfbStream::connect_raritan(&args.host, &session_id, &session_key, &port_id)?;
-    let (width, height) = rfb
-        .framebuffer_size()
-        .ok_or_else(|| color_eyre::eyre::eyre!("no framebuffer dimensions"))?;
-    info!(width, height, "handshake complete");
-    let format = PixelFormat::RGB565;
-    let mut framebuffer = Framebuffer::new(width, height);
-    let mut seen_encodings = HashSet::new();
-    let mut total_rects = 0usize;
-    for i in 0..args.frames {
-        let update = rfb.read_message()?;
-        for rect in &update.rectangles {
-            seen_encodings.insert(rect.encoding);
-        }
-        total_rects += update.rectangles.len();
-        framebuffer.apply_update(&update, format)?;
-        info!(
-            update = i,
-            flags = update.flags,
-            rects = update.rectangles.len(),
-            total_rects,
-            "framebuffer update"
-        );
-        rfb.request_framebuffer_update(true)?;
-    }
+    // NOTE: the TR video-stream grant (cmd 55) is intentionally skipped:
+    // the switch never answers it, while RFB streams fine without it.
+    // `establish_video` also holds the RDMEvent session like Java does.
+    let config = ConnectionConfig::new(&args.host, &args.user, &args.password);
+    let mut rfb = establish_video(&config, &port_id)?;
+    let (framebuffer, seen_encodings, total_rects) = capture_frames(&mut rfb, args.frames)?;
     info!(?seen_encodings, total_rects, "capture finished");
 
-    let mut ppm = format!("P6\n{} {}\n255\n", width, height).into_bytes();
-    let (pixels, _remainder) = framebuffer.rgba.as_chunks::<4>();
-    for pixel in pixels {
-        ppm.extend_from_slice(&pixel[1..4]);
-    }
-    std::fs::write(&args.out, &ppm)?;
+    std::fs::write(&args.out, encode_ppm(&framebuffer))?;
     info!(path = %args.out, "wrote frame");
-    if framebuffer.rgba.iter().all(|b| *b == 0) {
+    if is_black(&framebuffer) {
         warn!("framebuffer is completely black");
     }
+    Ok(())
+}
+
+fn dump_inventory_xml(client: &mut RdmClient, path: &str) -> color_eyre::Result<()> {
+    let mut xml = client.raw_inventory()?;
+    for device in ["D_000d5d065096", "D_000d5d065095"] {
+        xml.push_str(&format!("\n<!-- {device} -->\n"));
+        xml.push_str(&client.raw_device(device)?);
+    }
+    for query in [
+        "<Database><Get><Select>/System/Device[@Type='IP-Reach']/DeviceCapabilities</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>",
+        "<Database><Get><Select>/System/Device</Select><Nodes> Device </Nodes><SubNodes> Name SerialNo @id @Type @Model @BM @BaseDevice @CalibrationSpeed @ProductCode</SubNodes></Get></Database>",
+    ] {
+        xml.push_str(&format!("\n<!-- {query} -->\n"));
+        xml.push_str(&client.database_query(query)?);
+    }
+    std::fs::write(path, xml)?;
     Ok(())
 }

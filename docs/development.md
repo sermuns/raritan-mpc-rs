@@ -5,7 +5,7 @@
 ```bash
 cargo build --workspace --offline   # offline works once deps are cached
 cargo test --workspace --offline
-cargo clippy -p raritan-rfb -p raritan-cli
+cargo clippy --workspace --offline
 ```
 
 `CARGO_TARGET_DIR` is set to `~/.cache/cargo` in this environment, so
@@ -52,11 +52,20 @@ SSLKEYLOGFILE=/tmp/opencode/ourskeys.log raritan-cli ...
 
 ## Repo map
 
-- `raritan-rfb/src/lib.rs` — `RfbStream`, handshake/pump, `Framebuffer`
-  decoders, message constants, unit tests.
-- `raritan-rdm/src/client.rs` — `RdmClient`, event session, grant helpers.
-- `raritan-rdm/src/{protocol,model}.rs` — CSC framing, port parsing.
+- `raritan-common/src/` — shared CSC framing (`csc`), legacy TLS 1.0
+  (`tls`), XML helpers (`xml`), RC4/base64 (`crypto`), ports/timeouts
+  (`net`), big-endian readers (`io`).
+- `raritan-rfb/src/` — `proto` (message types), `creds`, `framebuffer`
+  (Raw decode), `lrle` (tile decoder), `transport` (TCP/TLS setup),
+  `handshake`, `pump` (steady-state messages); `RfbStream` itself in
+  `stream.rs`.
+- `raritan-rdm/src/` — `client.rs` (`RdmClient`), `handshake` (CSC
+  pre-TLS + auth), `event` (`CSC_Test2`), `tr` (legacy binary TR grant
+  diagnostics), `model` (port parsing); `protocol` re-exports common.
+- `raritan-session/src/lib.rs` — end-to-end video flow (RDM login →
+  event session → RFB → frame capture) shared by CLI and GUI.
 - `raritan-cli/src/main.rs` — list/capture/dump commands.
-- `raritan-mpc/src/main.rs` — egui app; video worker mirrors the CLI flow.
+- `raritan-mpc/src/main.rs` — egui app; video worker calls
+  `raritan-session::establish_video`.
 - `decompiled/` — CFR output of the Java client; the protocol reference
   behind `docs/rfb.md` and `docs/rdm.md`.

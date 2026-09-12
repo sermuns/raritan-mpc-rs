@@ -3,7 +3,8 @@
 Reference: decompiled `nn.pp.rccore.impl.rfb.*` (`RfbHandlerV01_29`,
 `RfbConstants`, `V01_22`/`V01_27` message classes) plus a decrypted
 packet capture of the Java client. Our implementation lives in
-`raritan-rfb/src/lib.rs` (`RfbStream`).
+`raritan-rfb/src/` (`RfbStream` in `stream.rs`, handshake in
+`handshake.rs`, pump in `pump.rs`, decoders in `framebuffer.rs`/`lrle.rs`).
 
 Transport: plain TCP to port 443. No CSC, no TLS, no RC4
 (`RemoteConsoleParameters.ssl == false`).

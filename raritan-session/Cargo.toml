@@ -1,12 +1,11 @@
 [package]
-name = "raritan-rdm"
+name = "raritan-session"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 eyre.workspace = true
-openssl.workspace = true
-quick-xml = { version = "0.42", features = ["serialize"] }
-serde = { version = "1", features = ["derive"] }
 tracing.workspace = true
 raritan-common.workspace = true
+raritan-rdm.workspace = true
+raritan-rfb.workspace = true

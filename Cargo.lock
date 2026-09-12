@@ -2071,9 +2071,19 @@ dependencies = [
  "clap",
  "color-eyre",
  "raritan-rdm",
- "raritan-rfb",
+ "raritan-session",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "raritan-common"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "eyre",
+ "openssl",
+ "tracing",
 ]
 
 [[package]]
@@ -2084,6 +2094,7 @@ dependencies = [
  "eyre",
  "raritan-rdm",
  "raritan-rfb",
+ "raritan-session",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2092,10 +2103,10 @@ dependencies = [
 name = "raritan-rdm"
 version = "0.1.0"
 dependencies = [
- "base64",
  "eyre",
  "openssl",
  "quick-xml 0.42.0",
+ "raritan-common",
  "serde",
  "tracing",
 ]
@@ -2104,10 +2115,21 @@ dependencies = [
 name = "raritan-rfb"
 version = "0.1.0"
 dependencies = [
- "base64",
  "eyre",
  "flate2",
  "openssl",
+ "raritan-common",
+ "tracing",
+]
+
+[[package]]
+name = "raritan-session"
+version = "0.1.0"
+dependencies = [
+ "eyre",
+ "raritan-common",
+ "raritan-rdm",
+ "raritan-rfb",
  "tracing",
 ]
 

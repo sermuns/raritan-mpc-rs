@@ -1,11 +1,10 @@
 [package]
-name = "raritan-rfb"
+name = "raritan-common"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 eyre.workspace = true
-flate2 = "1"
+base64.workspace = true
 openssl.workspace = true
 tracing.workspace = true
-raritan-common.workspace = true
