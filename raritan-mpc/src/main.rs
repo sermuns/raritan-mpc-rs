@@ -454,6 +454,18 @@ impl eframe::App for MpcApp {
                     if self.cmd_tx.is_some() {
                         // Right-align the buttons.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Disconnect").clicked() {
+                                // Drop our ends of the channels: the next
+                                // worker send fails and the thread exits
+                                // (bounded by the pump's read timeout),
+                                // closing the connection.
+                                self.frames = None;
+                                self.cmd_tx = None;
+                                self.texture = None;
+                                self.framebuffer_size = None;
+                                self.selected_port = None;
+                                self.connection_status = "Disconnected".to_owned();
+                            }
                             if ui.button("Auto sense").clicked()
                                 && let Some(tx) = &self.cmd_tx
                             {
