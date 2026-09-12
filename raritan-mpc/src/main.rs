@@ -47,6 +47,9 @@ struct MpcApp {
     framebuffer_size: Option<(u16, u16)>,
     show_sidebar: bool,
     sort_by_name: bool,
+    /// Pending port-list refresh result. `Some` while the background
+    /// enumeration runs; the button is inert until it completes.
+    port_refresh: Option<Receiver<Result<Vec<Port>, String>>>,
 }
 
 enum FrameMessage {
@@ -78,6 +81,7 @@ impl MpcApp {
                 framebuffer_size: None,
                 show_sidebar: true,
                 sort_by_name: false,
+                port_refresh: None,
             },
             Err(error) => Self {
                 ports: Vec::new(),
@@ -90,6 +94,7 @@ impl MpcApp {
                 framebuffer_size: None,
                 show_sidebar: true,
                 sort_by_name: false,
+                port_refresh: None,
             },
         }
     }
@@ -207,6 +212,55 @@ impl MpcApp {
             });
         }
         order
+    }
+
+    /// Re-runs port enumeration off the UI thread. The result lands in
+    /// `port_refresh` and is applied on the next frame; inert while one
+    /// is already in flight.
+    fn refresh_ports(&mut self) {
+        if self.port_refresh.is_some() {
+            return;
+        }
+        info!("refreshing port list");
+        let (sender, receiver) = mpsc::channel();
+        self.port_refresh = Some(receiver);
+        self.connection_status = "Refreshing ports".to_owned();
+        thread::spawn(move || {
+            let result = RdmClient::connect(HOST, USER, PASSWORD)
+                .and_then(|mut client| client.enumerate_ports())
+                .map(|ports| {
+                    ports
+                        .into_iter()
+                        .filter(|port| port.status == Some(1))
+                        .collect()
+                })
+                .map_err(|error| format!("{error:?}"));
+            let _ = sender.send(result);
+        });
+    }
+
+    /// Applies a finished refresh: swaps in the new list, keeps the
+    /// selected port if it still exists, and reports errors.
+    fn apply_refresh(&mut self, result: Result<Vec<Port>, String>) {
+        self.port_refresh = None;
+        match result {
+            Ok(ports) => {
+                info!(count = ports.len(), "port list refreshed");
+                let selected_id = self
+                    .selected_port
+                    .and_then(|index| self.ports.get(index))
+                    .map(|port| port.id.clone());
+                self.ports = ports;
+                self.selected_port =
+                    selected_id.and_then(|id| self.ports.iter().position(|port| port.id == id));
+                self.connection_status = "Ready".to_owned();
+            }
+            Err(error) => {
+                warn!(%error, "port list refresh failed");
+                self.error = Some(error);
+                self.connection_status = "Port refresh failed".to_owned();
+            }
+        }
     }
 }
 
@@ -389,54 +443,78 @@ impl eframe::App for MpcApp {
                 let _ = tx.send(command);
             }
         }
-        egui::Panel::top("header").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.toggle_value(&mut self.show_sidebar, "Ports")
-                    .on_hover_text("Show/hide the port sidebar");
-                ui.heading("Raritan MPC");
-                ui.label(HOST);
-                if let Some(error) = &self.error {
-                    ui.colored_label(egui::Color32::RED, error);
-                }
-            });
-        });
 
         if self.show_sidebar {
+            // Collect a finished background refresh before drawing: the
+            // list below always shows the latest applied ports.
+            if let Some(receiver) = self.port_refresh.take() {
+                match receiver.try_recv() {
+                    Ok(result) => self.apply_refresh(result),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        self.port_refresh = Some(receiver);
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        self.port_refresh = None;
+                    }
+                }
+            }
             egui::Panel::left("ports")
                 .default_size(220.0)
+                .resizable(false)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading("KVM ports");
-                        // Right-align the sort toggle.
+                        // Right-align the list controls.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(
+                                    self.port_refresh.is_none(),
+                                    egui::Button::new("Refresh"),
+                                )
+                                .on_hover_text("Re-enumerate ports on the switch")
+                                .clicked()
+                            {
+                                self.refresh_ports();
+                            }
                             ui.toggle_value(&mut self.sort_by_name, "A–Z")
                                 .on_hover_text("Sort by name instead of port number");
                         });
                     });
+                    if self.port_refresh.is_some() {
+                        ui.spinner();
+                    }
                     let order = self.port_order();
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        for index in order {
-                            let port = &self.ports[index];
-                            let label = format!(
-                                "{}  {}",
-                                port.index
-                                    .map_or_else(|| "?".to_owned(), |value| value.to_string()),
-                                port.name.as_deref().unwrap_or(&port.id),
-                            );
-                            if ui
-                                .selectable_label(self.selected_port == Some(index), label)
-                                .clicked()
-                            {
-                                self.selected_port = Some(index);
-                                let selected_port = port.clone();
-                                self.start_video(&selected_port);
-                                // Drop focus so Space/Enter go to the KVM
-                                // target instead of re-activating this label.
-                                if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
-                                    ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
+                        egui::Grid::new("port_list")
+                            .striped(true)
+                            .num_columns(1)
+                            .show(ui, |ui| {
+                                for index in order {
+                                    let port = &self.ports[index];
+                                    let label = format!(
+                                        "{}  {}",
+                                        port.index.map_or_else(
+                                            || "?".to_owned(),
+                                            |value| value.to_string()
+                                        ),
+                                        port.name.as_deref().unwrap_or(&port.id),
+                                    );
+                                    if ui
+                                        .selectable_label(self.selected_port == Some(index), label)
+                                        .clicked()
+                                    {
+                                        self.selected_port = Some(index);
+                                        let selected_port = port.clone();
+                                        self.start_video(&selected_port);
+                                        // Drop focus so Space/Enter go to the KVM
+                                        // target instead of re-activating this label.
+                                        if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
+                                            ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
+                                        }
+                                    }
+                                    ui.end_row();
                                 }
-                            }
-                        }
+                            });
                     });
                 });
         }
@@ -445,6 +523,8 @@ impl eframe::App for MpcApp {
             if let Some(index) = self.selected_port {
                 let port = &self.ports[index];
                 ui.horizontal(|ui| {
+                    ui.toggle_value(&mut self.show_sidebar, "Ports")
+                        .on_hover_text("Show/hide the port sidebar");
                     ui.heading(port.name.as_deref().unwrap_or("Selected port"));
                     ui.label(format!("Port ID: {}", port.id));
                     // Manual video actions, mirroring the Java client's
@@ -485,6 +565,9 @@ impl eframe::App for MpcApp {
                         });
                     }
                 });
+                if let Some(error) = &self.error {
+                    ui.colored_label(egui::Color32::RED, error);
+                }
                 ui.separator();
                 if let Some(texture) = &self.texture {
                     // Scale the framebuffer to fit the remaining panel
@@ -505,6 +588,14 @@ impl eframe::App for MpcApp {
                     });
                 }
             } else {
+                ui.horizontal(|ui| {
+                    ui.toggle_value(&mut self.show_sidebar, "Ports")
+                        .on_hover_text("Show/hide the port sidebar");
+                    if let Some(error) = &self.error {
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
+                });
+                ui.separator();
                 ui.centered_and_justified(|ui| {
                     ui.heading("Select a KVM port");
                 });
