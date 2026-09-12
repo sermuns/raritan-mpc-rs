@@ -17,7 +17,7 @@ const PASSWORD: &str = "admin";
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("raritan_mpc=debug,raritan_rdm=debug,raritan_rfb=trace")
+            EnvFilter::new("raritan_mpc=info,raritan_rdm=info,raritan_rfb=info,raritan_session=info,raritan_common=info")
         }))
         .with_target(false)
         .init();

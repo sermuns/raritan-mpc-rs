@@ -37,7 +37,7 @@ cargo run -p raritan-mpc
 ```
 
 Credentials default to `admin` / `admin` (`--user`, `--password` override).
-Logging defaults to `raritan_mpc=debug,raritan_rdm=debug,raritan_rfb=debug`
+Logging defaults to `raritan_mpc=info,raritan_rdm=info,raritan_rfb=info,raritan_session=info,raritan_common=info`
 (override with `RUST_LOG`).
 
 ## Reading guide

@@ -47,7 +47,7 @@ SSLKEYLOGFILE=/tmp/opencode/ourskeys.log raritan-cli ...
 - RDM on 5000 is TLS 1.0: force dissection with
   `-d tcp.port==5000,tls`, reassemble via `tcp.payload`, decrypt per
   [Verification](verification.md).
-- Default log filter already gives per-crate debug/trace; override with
+- Default log filter already gives per-crate info; override with
   `RUST_LOG` (note: setting it *replaces* the default filter entirely).
 
 ## Repo map
