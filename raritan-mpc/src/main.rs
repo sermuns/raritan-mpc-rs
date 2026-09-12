@@ -704,34 +704,30 @@ impl eframe::App for MpcApp {
                 .resizable(false)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.heading("KVM ports");
-                        // Right-align the list controls.
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add_enabled(
-                                    self.port_refresh.is_none(),
-                                    egui::Button::new("Refresh"),
-                                )
-                                .on_hover_text("Re-enumerate ports on the switch")
-                                .clicked()
-                            {
-                                self.refresh_ports();
-                            }
-                            egui::ComboBox::from_id_salt("port_sort")
-                                .selected_text(self.sort_order.label())
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut self.sort_order,
-                                        SortOrder::PortNumber,
-                                        SortOrder::PortNumber.label(),
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.sort_order,
-                                        SortOrder::Name,
-                                        SortOrder::Name.label(),
-                                    );
-                                });
-                        });
+                        if ui
+                            .add_enabled(self.port_refresh.is_none(), egui::Button::new("Refresh"))
+                            .on_hover_text("Re-enumerate ports on the switch")
+                            .clicked()
+                        {
+                            self.refresh_ports();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Sort by:");
+                        egui::ComboBox::from_id_salt("port_sort")
+                            .selected_text(self.sort_order.label())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.sort_order,
+                                    SortOrder::PortNumber,
+                                    SortOrder::PortNumber.label(),
+                                );
+                                ui.selectable_value(
+                                    &mut self.sort_order,
+                                    SortOrder::Name,
+                                    SortOrder::Name.label(),
+                                );
+                            });
                     });
                     if self.port_refresh.is_some() {
                         ui.spinner();
