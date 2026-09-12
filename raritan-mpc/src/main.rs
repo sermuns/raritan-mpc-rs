@@ -45,6 +45,8 @@ struct MpcApp {
     cmd_tx: Option<Sender<VideoCommand>>,
     texture: Option<egui::TextureHandle>,
     framebuffer_size: Option<(u16, u16)>,
+    show_sidebar: bool,
+    sort_by_name: bool,
 }
 
 enum FrameMessage {
@@ -74,6 +76,8 @@ impl MpcApp {
                 cmd_tx: None,
                 texture: None,
                 framebuffer_size: None,
+                show_sidebar: true,
+                sort_by_name: false,
             },
             Err(error) => Self {
                 ports: Vec::new(),
@@ -84,6 +88,8 @@ impl MpcApp {
                 cmd_tx: None,
                 texture: None,
                 framebuffer_size: None,
+                show_sidebar: true,
+                sort_by_name: false,
             },
         }
     }
@@ -183,19 +189,36 @@ impl MpcApp {
             }
         });
     }
+
+    /// Display order for the port list: enumeration (port-number) order
+    /// by default, case-insensitive by name when toggled.
+    fn port_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.ports.len()).collect();
+        if self.sort_by_name {
+            order.sort_by(|&a, &b| {
+                let name = |index: usize| {
+                    self.ports[index]
+                        .name
+                        .as_deref()
+                        .unwrap_or(&self.ports[index].id)
+                        .to_lowercase()
+                };
+                name(a).cmp(&name(b))
+            });
+        }
+        order
+    }
 }
 
 /// True when the error is just the worker's read timeout expiring
 /// (no server data within the poll window), as opposed to a real failure.
 fn is_read_timeout(error: &eyre::Report) -> bool {
-    error
-        .downcast_ref::<std::io::Error>()
-        .is_some_and(|io| {
-            matches!(
-                io.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            )
-        })
+    error.downcast_ref::<std::io::Error>().is_some_and(|io| {
+        matches!(
+            io.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        )
+    })
 }
 
 /// Maps an egui key to the Java key code + location the en_US Eric table
@@ -368,6 +391,8 @@ impl eframe::App for MpcApp {
         }
         egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
+                ui.toggle_value(&mut self.show_sidebar, "Ports")
+                    .on_hover_text("Show/hide the port sidebar");
                 ui.heading("Raritan MPC");
                 ui.label(HOST);
                 if let Some(error) = &self.error {
@@ -376,35 +401,45 @@ impl eframe::App for MpcApp {
             });
         });
 
-        egui::Panel::left("ports")
-            .default_size(220.0)
-            .show(ui, |ui| {
-                ui.heading("KVM ports");
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for index in 0..self.ports.len() {
-                        let port = &self.ports[index];
-                        let label = format!(
-                            "{}  {}",
-                            port.index
-                                .map_or_else(|| "?".to_owned(), |value| value.to_string()),
-                            port.name.as_deref().unwrap_or(&port.id),
-                        );
-                        if ui
-                            .selectable_label(self.selected_port == Some(index), label)
-                            .clicked()
-                        {
-                            self.selected_port = Some(index);
-                            let selected_port = port.clone();
-                            self.start_video(&selected_port);
-                            // Drop focus so Space/Enter go to the KVM
-                            // target instead of re-activating this label.
-                            if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
-                                ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
+        if self.show_sidebar {
+            egui::Panel::left("ports")
+                .default_size(220.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("KVM ports");
+                        // Right-align the sort toggle.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.toggle_value(&mut self.sort_by_name, "A–Z")
+                                .on_hover_text("Sort by name instead of port number");
+                        });
+                    });
+                    let order = self.port_order();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for index in order {
+                            let port = &self.ports[index];
+                            let label = format!(
+                                "{}  {}",
+                                port.index
+                                    .map_or_else(|| "?".to_owned(), |value| value.to_string()),
+                                port.name.as_deref().unwrap_or(&port.id),
+                            );
+                            if ui
+                                .selectable_label(self.selected_port == Some(index), label)
+                                .clicked()
+                            {
+                                self.selected_port = Some(index);
+                                let selected_port = port.clone();
+                                self.start_video(&selected_port);
+                                // Drop focus so Space/Enter go to the KVM
+                                // target instead of re-activating this label.
+                                if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
+                                    ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
+                                }
                             }
                         }
-                    }
+                    });
                 });
-            });
+        }
 
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(index) = self.selected_port {
@@ -418,27 +453,24 @@ impl eframe::App for MpcApp {
                     // when the picture needs a nudge.
                     if self.cmd_tx.is_some() {
                         // Right-align the buttons.
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui.button("Auto sense").clicked()
-                                    && let Some(tx) = &self.cmd_tx
-                                {
-                                    let _ = tx.send(VideoCommand::VideoSettings {
-                                        setting: 18,
-                                        value: 0,
-                                    });
-                                }
-                                if ui.button("Calibrate color").clicked()
-                                    && let Some(tx) = &self.cmd_tx
-                                {
-                                    let _ = tx.send(VideoCommand::VideoSettings {
-                                        setting: 19,
-                                        value: 0,
-                                    });
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Auto sense").clicked()
+                                && let Some(tx) = &self.cmd_tx
+                            {
+                                let _ = tx.send(VideoCommand::VideoSettings {
+                                    setting: 18,
+                                    value: 0,
+                                });
+                            }
+                            if ui.button("Calibrate color").clicked()
+                                && let Some(tx) = &self.cmd_tx
+                            {
+                                let _ = tx.send(VideoCommand::VideoSettings {
+                                    setting: 19,
+                                    value: 0,
+                                });
+                            }
+                        });
                     }
                 });
                 ui.separator();
