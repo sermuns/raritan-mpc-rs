@@ -1,10 +1,11 @@
 use eframe::egui;
 use raritan_rdm::{Port, RdmClient};
-use raritan_rfb::{Framebuffer, PixelFormat};
+use raritan_rfb::{Framebuffer, PixelFormat, eric_code};
 use raritan_session::{ConnectionConfig, establish_video};
 use std::{
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, Sender},
     thread,
+    time::Duration,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -39,6 +40,9 @@ struct MpcApp {
     error: Option<String>,
     connection_status: String,
     frames: Option<Receiver<FrameMessage>>,
+    /// Outbound key events (Eric code, pressed?) for the video worker.
+    /// `None` while no video session is running.
+    key_tx: Option<Sender<(u16, bool)>>,
     texture: Option<egui::TextureHandle>,
     framebuffer_size: Option<(u16, u16)>,
 }
@@ -67,6 +71,7 @@ impl MpcApp {
                 error: None,
                 connection_status: "Ready".to_owned(),
                 frames: None,
+                key_tx: None,
                 texture: None,
                 framebuffer_size: None,
             },
@@ -76,6 +81,7 @@ impl MpcApp {
                 error: Some(format!("{error:?}")),
                 connection_status: "Port enumeration failed".to_owned(),
                 frames: None,
+                key_tx: None,
                 texture: None,
                 framebuffer_size: None,
             },
@@ -86,7 +92,9 @@ impl MpcApp {
         let port_id = port.id.clone();
         info!(%port_id, "starting framebuffer worker");
         let (sender, receiver) = mpsc::channel();
+        let (key_sender, key_receiver) = mpsc::channel();
         self.frames = Some(receiver);
+        self.key_tx = Some(key_sender);
         self.texture = None;
         self.framebuffer_size = None;
         self.error = None;
@@ -111,21 +119,51 @@ impl MpcApp {
                     .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
                 let format = PixelFormat::RGB565;
                 let mut framebuffer = Framebuffer::new(width, height);
-                loop {
-                    let update = rfb.read_message()?;
-                    info!(
-                        rectangles = update.rectangles.len(),
-                        flags = update.flags,
-                        "decoded framebuffer update"
-                    );
-                    framebuffer.apply_update(&update, format)?;
-                    sender.send(FrameMessage::Frame {
-                        width,
-                        height,
-                        rgba: framebuffer.rgba.clone(),
-                    })?;
-                    rfb.request_framebuffer_update(true)?;
+                // Short read timeout so queued key events are flushed
+                // promptly even when the server sends nothing.
+                rfb.set_read_timeout(Some(Duration::from_millis(100)))?;
+                // Eric codes currently held down on the target. On exit
+                // every held key is released so a dropped connection can
+                // never leave the target with a key stuck down (which the
+                // VM would repeat forever).
+                let mut held: Vec<u16> = Vec::new();
+                let result = (|| -> eyre::Result<()> {
+                    loop {
+                        while let Ok((eric, down)) = key_receiver.try_recv() {
+                            rfb.write_key_event(eric, down)?;
+                            if down {
+                                if !held.contains(&eric) {
+                                    held.push(eric);
+                                }
+                            } else if let Some(index) =
+                                held.iter().position(|held| *held == eric)
+                            {
+                                held.swap_remove(index);
+                            }
+                        }
+                        let update = match rfb.read_message() {
+                            Ok(update) => update,
+                            Err(error) if is_read_timeout(&error) => continue,
+                            Err(error) => return Err(error),
+                        };
+                        info!(
+                            rectangles = update.rectangles.len(),
+                            flags = update.flags,
+                            "decoded framebuffer update"
+                        );
+                        framebuffer.apply_update(&update, format)?;
+                        sender.send(FrameMessage::Frame {
+                            width,
+                            height,
+                            rgba: framebuffer.rgba.clone(),
+                        })?;
+                        rfb.request_framebuffer_update(true)?;
+                    }
+                })();
+                for eric in held {
+                    let _ = rfb.write_key_event(eric, false);
                 }
+                result
             })();
             if let Err(error) = result {
                 error!(%error, "framebuffer worker stopped");
@@ -133,6 +171,113 @@ impl MpcApp {
             }
         });
     }
+}
+
+/// True when the error is just the worker's read timeout expiring
+/// (no server data within 100 ms), as opposed to a real failure.
+fn is_read_timeout(error: &eyre::Report) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            )
+        })
+}
+
+/// Maps an egui key to the Java key code + location the en_US Eric table
+/// in `raritan-rfb` expects. Shifted US symbols (e.g. `?`, `!`, `:`)
+/// map to their physical base key; the Shift press itself is forwarded
+/// as a separate event, exactly like the Java client sends it.
+fn java_key(key: egui::Key) -> Option<(i32, i32)> {
+    use egui::Key as K;
+    let mapped = match key {
+        K::ArrowUp => (38, 1),
+        K::ArrowDown => (40, 1),
+        K::ArrowLeft => (37, 1),
+        K::ArrowRight => (39, 1),
+        K::Escape => (27, 1),
+        K::Tab => (9, 1),
+        K::Backspace => (8, 1),
+        K::Enter => (10, 1),
+        K::Space => (32, 1),
+        K::Insert => (155, 1),
+        K::Delete => (127, 1),
+        K::Home => (36, 1),
+        K::End => (35, 1),
+        K::PageUp => (33, 1),
+        K::PageDown => (34, 1),
+        K::ShiftLeft => (16, 2),
+        K::ShiftRight => (16, 3),
+        K::ControlLeft => (17, 2),
+        K::ControlRight => (17, 3),
+        K::AltLeft => (18, 2),
+        K::AltRight => (18, 3),
+        K::SuperLeft => (524, 2),
+        K::SuperRight => (268, 3),
+        K::Minus => (45, 1),
+        K::Equals | K::Plus => (61, 1),
+        K::OpenBracket | K::OpenCurlyBracket => (91, 1),
+        K::CloseBracket | K::CloseCurlyBracket => (93, 1),
+        K::Backslash | K::Pipe => (92, 1),
+        K::Semicolon | K::Colon => (59, 1),
+        K::Quote => (222, 1),
+        K::Comma => (44, 1),
+        K::Period => (46, 1),
+        K::Slash | K::Questionmark => (47, 1),
+        K::Backtick => (192, 1),
+        K::Num0 => (48, 1),
+        K::Num1 | K::Exclamationmark => (49, 1),
+        K::Num2 => (50, 1),
+        K::Num3 => (51, 1),
+        K::Num4 => (52, 1),
+        K::Num5 => (53, 1),
+        K::Num6 => (54, 1),
+        K::Num7 => (55, 1),
+        K::Num8 => (56, 1),
+        K::Num9 => (57, 1),
+        K::A => (65, 1),
+        K::B => (66, 1),
+        K::C => (67, 1),
+        K::D => (68, 1),
+        K::E => (69, 1),
+        K::F => (70, 1),
+        K::G => (71, 1),
+        K::H => (72, 1),
+        K::I => (73, 1),
+        K::J => (74, 1),
+        K::K => (75, 1),
+        K::L => (76, 1),
+        K::M => (77, 1),
+        K::N => (78, 1),
+        K::O => (79, 1),
+        K::P => (80, 1),
+        K::Q => (81, 1),
+        K::R => (82, 1),
+        K::S => (83, 1),
+        K::T => (84, 1),
+        K::U => (85, 1),
+        K::V => (86, 1),
+        K::W => (87, 1),
+        K::X => (88, 1),
+        K::Y => (89, 1),
+        K::Z => (90, 1),
+        K::F1 => (112, 1),
+        K::F2 => (113, 1),
+        K::F3 => (114, 1),
+        K::F4 => (115, 1),
+        K::F5 => (116, 1),
+        K::F6 => (117, 1),
+        K::F7 => (118, 1),
+        K::F8 => (119, 1),
+        K::F9 => (120, 1),
+        K::F10 => (121, 1),
+        K::F11 => (122, 1),
+        K::F12 => (123, 1),
+        _ => return None,
+    };
+    Some(mapped)
 }
 
 impl eframe::App for MpcApp {
@@ -165,13 +310,39 @@ impl eframe::App for MpcApp {
                     }
                     FrameMessage::Error(error) => {
                         warn!(%error, "framebuffer error received by GUI");
-                        self.error = Some(error)
+                        self.error = Some(error);
+                        // Worker is gone; stop queueing keys for it.
+                        self.key_tx = None;
                     }
                 }
             }
         }
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
+
+        // Forward physical key presses to the KVM target while a video
+        // session runs. Text events are deliberately ignored (the Key
+        // press/release pair already carries what the target needs).
+        if let Some(tx) = &self.key_tx {
+            let keys: Vec<(u16, bool)> = ui.ctx().input(|input| {
+                input
+                    .events
+                    .iter()
+                    .filter_map(|event| {
+                        if let egui::Event::Key { key, pressed, .. } = event {
+                            java_key(*key)
+                                .and_then(|(code, location)| eric_code(code, location))
+                                .map(|eric| (eric, *pressed))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            });
+            for (eric, down) in keys {
+                let _ = tx.send((eric, down));
+            }
+        }
         egui::Panel::top("header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Raritan MPC");
@@ -202,6 +373,11 @@ impl eframe::App for MpcApp {
                             self.selected_port = Some(index);
                             let selected_port = port.clone();
                             self.start_video(&selected_port);
+                            // Drop focus so Space/Enter go to the KVM
+                            // target instead of re-activating this label.
+                            if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
+                                ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
+                            }
                         }
                     }
                 });

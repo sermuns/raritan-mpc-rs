@@ -10,6 +10,7 @@
 pub mod creds;
 pub mod framebuffer;
 pub mod handshake;
+pub mod input;
 pub mod lrle;
 pub mod proto;
 pub mod pump;
@@ -18,6 +19,7 @@ pub mod transport;
 
 pub use creds::RfbCredentials;
 pub use framebuffer::{Framebuffer, FramebufferRectangle, FramebufferUpdate, PixelFormat};
+pub use input::eric_code;
 pub use stream::RfbStream;
 
 #[cfg(test)]

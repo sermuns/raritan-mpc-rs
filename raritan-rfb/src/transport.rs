@@ -21,6 +21,14 @@ impl RfbStream<TcpStream> {
         Ok(Self::new(stream))
     }
 
+    /// Sets the socket read timeout. The GUI worker uses a short timeout
+    /// so it can interleave outbound key events with the blocking message
+    /// pump; timeouts surface as `TimedOut`/`WouldBlock` io errors.
+    pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> Result<()> {
+        self.stream.set_read_timeout(timeout)?;
+        Ok(())
+    }
+
     /// Plaintext video channel on 443, as used by the Java client
     /// (`RemoteConsoleParameters.ssl == false`).
     pub fn connect_raritan(

@@ -30,6 +30,7 @@ pub const USB_PROFILE_LIST: u8 = 170;
 pub const SET_PIXEL_FORMAT: u8 = 0;
 pub const SET_ENCODINGS: u8 = 2;
 pub const FB_UPDATE_REQUEST: u8 = 3;
+pub const KEY_EVENT: u8 = 4;
 pub const CLIENT_INIT: u8 = 7;
 pub const ASSOCIATED_TAG: u8 = 8;
 pub const LOGIN: u8 = 32;

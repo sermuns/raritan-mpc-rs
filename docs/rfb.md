@@ -57,6 +57,19 @@ Byte-exact copy of the Java client (`jrfb_c.bin` in captures):
 The three full requests (not one) plus the tail are what actually makes
 the server start sending frames.
 
+## Client → server input
+
+- Key event (`RfbKeyEventMsgV01_27`, type 4): `[4, 0, keysym:u16-be]`
+  where `keysym = eric & 0x7FFF | (down ? 0x8000 : 0)` — the high bit
+  means key *pressed* (each tap's first frame in the capture has it
+  set). The Eric codes
+  are Raritan's own numbering from `KeyTranslatorBase` (en_US): H→0x22,
+  E→0x11, L→0x25, O→0x17, Space→0x38, W→0x10, R→0x12, D→0x1f,
+  Enter→0x1b — verified byte-for-byte against a Java capture typing
+  "hello world" + Enter (`input.rs::eric_code`, `write_key_event`).
+- Pointer event (type 5), mouse sync (134), KVM switch (137) as in the
+  session-init tail above.
+
 ## Steady state
 
 - `request_framebuffer_update(true)`: full-area incremental request

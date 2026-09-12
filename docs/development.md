@@ -56,7 +56,8 @@ SSLKEYLOGFILE=/tmp/opencode/ourskeys.log raritan-cli ...
   (`tls`), XML helpers (`xml`), RC4/base64 (`crypto`), ports/timeouts
   (`net`), big-endian readers (`io`).
 - `raritan-rfb/src/` — `proto` (message types), `creds`, `framebuffer`
-  (Raw decode), `lrle` (tile decoder), `transport` (TCP/TLS setup),
+  (Raw decode), `lrle` (tile decoder), `input` (key events + Eric
+  table), `transport` (TCP/TLS setup),
   `handshake`, `pump` (steady-state messages); `RfbStream` itself in
   `stream.rs`.
 - `raritan-rdm/src/` — `client.rs` (`RdmClient`), `handshake` (CSC
