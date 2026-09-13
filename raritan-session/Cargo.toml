@@ -7,6 +7,5 @@ publish.workspace = true
 [dependencies]
 eyre.workspace = true
 tracing.workspace = true
-raritan-common.workspace = true
 raritan-rdm.workspace = true
 raritan-rfb.workspace = true

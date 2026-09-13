@@ -2132,7 +2132,6 @@ dependencies = [
  "openssl",
  "quick-xml 0.42.0",
  "rc4",
- "tracing",
 ]
 
 [[package]]
@@ -2176,7 +2175,6 @@ name = "raritan-session"
 version = "1.0.0"
 dependencies = [
  "eyre",
- "raritan-common",
  "raritan-rdm",
  "raritan-rfb",
  "tracing",
