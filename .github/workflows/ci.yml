@@ -97,7 +97,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: taiki-e/install-action@v2.85.3
+      - uses: taiki-e/install-action@v2.87.10
         with:
           tool: cargo-deny
 
