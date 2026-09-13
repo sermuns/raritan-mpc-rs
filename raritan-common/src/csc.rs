@@ -15,10 +15,7 @@ pub fn write_frame<W: Write>(stream: &mut W, payload: &str) -> Result<()> {
 }
 
 pub fn write_frame_bytes<W: Write>(stream: &mut W, payload: &[u8]) -> Result<()> {
-    let frame_len = payload
-        .len()
-        .checked_add(5)
-        .ok_or_eyre("frame too large")?;
+    let frame_len = payload.len().checked_add(5).ok_or_eyre("frame too large")?;
     let frame_len = u32::try_from(frame_len).map_err(|_| eyre!("frame too large"))?;
     stream.write_all(&frame_len.to_be_bytes())?;
     stream.write_all(payload)?;

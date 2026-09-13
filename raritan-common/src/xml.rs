@@ -23,7 +23,10 @@ mod tests {
 
     #[test]
     fn escapes_all_specials() {
-        assert_eq!(escape_xml("<a href=\"x\">&'"), "&lt;a href=&quot;x&quot;&gt;&amp;&apos;");
+        assert_eq!(
+            escape_xml("<a href=\"x\">&'"),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&apos;"
+        );
     }
 
     #[test]

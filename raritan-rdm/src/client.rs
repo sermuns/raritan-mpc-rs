@@ -164,11 +164,7 @@ impl RdmClient {
     /// with `RDMEvent` + our session ID, TLS upgrade, then the RC4
     /// `CSC_Test2` dance keyed by the RDM session key. The stream is
     /// drained in the background (mirrors Java's always-on event loop).
-    pub fn open_event_session(
-        &self,
-        session_id: &str,
-        session_key: &str,
-    ) -> eyre::Result<()> {
+    pub fn open_event_session(&self, session_id: &str, session_key: &str) -> eyre::Result<()> {
         info!(%session_id, "opening RDM event session");
         let mut socket = Self::tcp_connect(&self.host)?;
         csc_start_session(&mut socket, "RDMEvent", Some(session_id))?;
@@ -176,9 +172,7 @@ impl RdmClient {
         csc_test2(&mut tls, session_key)?;
         info!("RDM event session established");
         std::thread::spawn(move || {
-            let _ = tls
-                .get_ref()
-                .set_read_timeout(Some(EVENT_DRAIN_TIMEOUT));
+            let _ = tls.get_ref().set_read_timeout(Some(EVENT_DRAIN_TIMEOUT));
             loop {
                 match read_frame(&mut tls) {
                     Ok(frame) => info!(
@@ -187,15 +181,12 @@ impl RdmClient {
                         "RDM event",
                     ),
                     Err(error) => {
-                        let idle = error
-                            .downcast_ref::<std::io::Error>()
-                            .is_some_and(|io| {
-                                matches!(
-                                    io.kind(),
-                                    std::io::ErrorKind::WouldBlock
-                                        | std::io::ErrorKind::TimedOut
-                                )
-                            });
+                        let idle = error.downcast_ref::<std::io::Error>().is_some_and(|io| {
+                            matches!(
+                                io.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            )
+                        });
                         if !idle {
                             info!(error = %format!("{error:#}"), "RDM event session closed");
                             return;
