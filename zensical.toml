@@ -19,6 +19,8 @@ nav = [
 
 [project.theme]
 language = "en"
+favicon = "assets/images/favicon.png"
+logo = "assets/logo.png"
 features = [
   "content.code.copy",
   "content.code.select",

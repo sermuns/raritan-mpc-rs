@@ -6,6 +6,7 @@ GenericName=KVM Client
 Comment=Rust rewrite of Raritan Multi-Platform Client for KVM-over-IP switches
 Exec=raritan-mpc
 TryExec=raritan-mpc
+Icon=raritan-mpc
 Terminal=false
 Categories=Network;RemoteAccess;
 Keywords=KVM;Raritan;Remote;VNC;

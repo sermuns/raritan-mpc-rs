@@ -29,8 +29,14 @@ fn main() -> eframe::Result {
         .with_target(false)
         .init();
     info!("starting Raritan MPC");
+    let mut viewport = egui::ViewportBuilder::default();
+    match load_app_icon() {
+        Some(icon) => viewport = viewport.with_icon(icon),
+        None => warn!("embedded app icon is unreadable; using toolkit default"),
+    }
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
+        viewport,
         ..Default::default()
     };
 
@@ -698,6 +704,37 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
     })
 }
 
+/// Window icon decoded from the embedded `media/icon-128.png` (`None`
+/// keeps the toolkit default; a broken asset must never block startup).
+/// Decoded with the `png` crate directly — the only format ever embedded
+/// here — instead of pulling in a full image-codec dependency.
+fn load_app_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(
+        include_bytes!("../../media/icon-128.png"),
+    ))
+    .read_info()
+    .ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => {
+            let mut rgba = Vec::with_capacity(buf.len() / 3 * 4);
+            let (pixels, _) = buf.as_chunks::<3>();
+            for pixel in pixels {
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 0xFF]);
+            }
+            rgba
+        }
+        _ => return None,
+    };
+    Some(std::sync::Arc::new(egui::IconData {
+        rgba,
+        width: info.width,
+        height: info.height,
+    }))
+}
+
 /// Short git sha for the version stamp, from vergen-gitcl's
 /// `VERGEN_GIT_SHA` (set by `build.rs`). Falls back to placeholders
 /// when built outside a git checkout, with `*` marking a dirty tree.
@@ -1118,5 +1155,17 @@ impl eframe::App for MpcApp {
                 });
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_icon_decodes_to_rgba() {
+        let icon = load_app_icon().expect("media/icon-128.png must decode");
+        assert_eq!((icon.width, icon.height), (128, 128));
+        assert_eq!(icon.rgba.len(), 128 * 128 * 4);
     }
 }

@@ -73,6 +73,7 @@ jobs:
           else
             cp target/${{ matrix.build.TARGET }}/release/${{ env.GUI_NAME }} ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
             cp raritan-mpc.desktop ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
+            cp media/logo.svg ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/${{ env.GUI_NAME }}.svg
           fi
           cp COPYING NOTICE ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
           cp -r LICENSES ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
