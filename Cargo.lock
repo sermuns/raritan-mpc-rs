@@ -2113,7 +2113,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raritan-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "color-eyre",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "raritan-common"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64",
  "eyre",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "raritan-mpc"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "eframe",
  "eyre",
@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "raritan-rdm"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "eyre",
  "openssl",
@@ -2161,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "raritan-rfb"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "eyre",
  "flate2",
@@ -2172,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "raritan-session"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "eyre",
  "raritan-rdm",
