@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Raritan MPC
+GenericName=KVM Client
+Comment=Rust rewrite of Raritan Multi-Platform Client for KVM-over-IP switches
+Exec=raritan-mpc
+TryExec=raritan-mpc
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=KVM;Raritan;Remote;VNC;
+StartupNotify=true
