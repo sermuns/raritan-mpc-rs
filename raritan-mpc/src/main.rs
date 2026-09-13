@@ -946,11 +946,16 @@ impl eframe::App for MpcApp {
                     if self.port_refresh.is_some() {
                         ui.spinner();
                     }
+                    // Footer first: bottom-up claims the sidebar bottom so
+                    // the version stamp can't be pushed off-screen; the
+                    // scroll area then takes whatever space remains.
+                    // (First widget added = bottom-most.)
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                        ui.small(format!("v{} · {}", env!("CARGO_PKG_VERSION"), short_sha()));
+                        ui.separator();
+                    });
                     let order = self.port_order();
                     egui::ScrollArea::vertical()
-                        // Take all free space (don't shrink to content) so
-                        // the version stamp below stays pinned to the
-                        // sidebar bottom.
                         .auto_shrink(false)
                         .show(ui, |ui| {
                         egui::Grid::new("port_list")
@@ -984,10 +989,6 @@ impl eframe::App for MpcApp {
                                 }
                             });
                     });
-                    // Version stamp pinned to the sidebar bottom (the
-                    // scroll area above takes all free space).
-                    ui.separator();
-                    ui.small(format!("v{} · {}", env!("CARGO_PKG_VERSION"), short_sha()));
                 });
         }
 
