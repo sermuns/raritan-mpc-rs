@@ -22,8 +22,6 @@ pub struct Port {
     #[serde(rename = "DeviceID", default)]
     pub device_id: Option<String>,
     pub name: Option<String>,
-    #[serde(skip)]
-    pub portal_id: Option<String>,
 }
 
 pub(crate) fn parse_ports(xml: &str) -> Result<Vec<Port>> {

@@ -85,7 +85,11 @@ fn main() -> color_eyre::Result<()> {
     // NOTE: the TR video-stream grant (cmd 55) is intentionally skipped:
     // the switch never answers it, while RFB streams fine without it.
     // `establish_video` also holds the RDMEvent session like Java does.
-    let config = ConnectionConfig::new(&args.host, &args.user, &args.password);
+    let config = ConnectionConfig {
+        host: args.host.clone(),
+        user: args.user.clone(),
+        password: args.password.clone(),
+    };
     let mut rfb = establish_video(&config, &port_id)?;
     let (framebuffer, seen_encodings, total_rects) = capture_frames(&mut rfb, args.frames)?;
     info!(?seen_encodings, total_rects, "capture finished");

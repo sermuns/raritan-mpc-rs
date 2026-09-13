@@ -2,7 +2,6 @@
 //! (`RfbHandlerV01_29`) and truth.pcapng stream 4.
 
 use crate::{
-    creds::RfbCredentials,
     framebuffer::PixelFormat,
     proto::{
         ASSOCIATED_TAG, AUTH_CAPS, AUTH_METHOD_RDM_SESSION, AUTH_SUCCESSFUL, CHALLENGE_RESPONSE,
@@ -14,12 +13,12 @@ use crate::{
     stream::RfbStream,
 };
 use eyre::{Result, bail};
-use raritan_common::{read_i32, read_u8};
+use raritan_common::{SessionCreds, read_i32, read_u8};
 use std::io::{Read, Write};
 use tracing::{debug, info, trace, warn};
 
 impl<S: Read + Write> RfbStream<S> {
-    pub fn handshake(&mut self, credentials: &RfbCredentials, port: &str) -> Result<PixelFormat> {
+    pub fn handshake(&mut self, credentials: &SessionCreds, port: &str) -> Result<PixelFormat> {
         info!(%port, "starting RFB 1.29 handshake");
         // RfbHelloMsgV01_00 / RfbVersionMsgV01_00.
         self.stream.write_all(b"e-RIC AUTH=")?;
@@ -138,7 +137,7 @@ impl<S: Read + Write> RfbStream<S> {
     /// Client session init after the server 7 welcome message:
     /// `[7,0,flags=4]` + associated tag (the RDM session string) +
     /// KVM-switch event.
-    fn write_client_init(&mut self, credentials: &RfbCredentials, port: &str) -> Result<()> {
+    fn write_client_init(&mut self, credentials: &SessionCreds, port: &str) -> Result<()> {
         self.stream.write_all(&[CLIENT_INIT, 0, 0, 4])?;
         self.write_associated_tag(credentials.rdm_session().as_bytes())?;
         self.write_kvm_switch(port)?;

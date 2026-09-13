@@ -1,7 +1,7 @@
 //! Plaintext CSC handshake shared by the main, unauthenticated, and
 //! event sessions: greeting → `<CSC_Ack/>` → info → `StartSession`.
 
-use eyre::{Context, OptionExt, bail};
+use eyre::{Context, bail};
 use raritan_common::{display_xml, read_frame, write_frame};
 use std::io::{Read, Write};
 use tracing::debug;
@@ -52,20 +52,4 @@ pub fn csc_auth<S: Read + Write>(tls: &mut S, user: &str, password: &str) -> eyr
         bail!("authentication failed: {}", display_xml(&auth));
     }
     Ok(())
-}
-
-/// Extracts `SessionID`/`SessionKey` from a `<Session><GetSessionID/>`
-/// response (attribute or element form).
-pub fn session_pair(
-    session_id: Option<String>,
-    session_id_element: Option<String>,
-    session_key: Option<String>,
-    session_key_element: Option<String>,
-) -> eyre::Result<(String, Option<String>)> {
-    Ok((
-        session_id
-            .or(session_id_element)
-            .ok_or_eyre("response did not contain SessionID")?,
-        session_key.or(session_key_element),
-    ))
 }

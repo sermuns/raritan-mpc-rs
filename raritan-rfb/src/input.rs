@@ -89,11 +89,6 @@ impl<S: Read + Write> RfbStream<S> {
         Ok(())
     }
 
-    /// Manual "Calibrate Color" action (Java `calibrateColor()` menu).
-    pub fn request_color_calibration(&mut self) -> Result<()> {
-        self.write_video_settings_event(19, 0)
-    }
-
     /// Releases every key code (0–137). The switch holds per-target key
     /// state across connections, so a modifier whose release was lost
     /// (e.g. app killed or focus switched while held) would otherwise
@@ -106,27 +101,6 @@ impl<S: Read + Write> RfbStream<S> {
             self.write_key_event(eric, false)?;
         }
         Ok(())
-    }
-
-    /// Manual "Auto Sense" action (Java `autoSenseVideo()` menu).
-    pub fn request_video_auto_sense(&mut self) -> Result<()> {
-        self.write_video_settings_event(18, 0)
-    }
-
-    /// Dispatches one [`VideoCommand`] from the UI thread.
-    pub fn write_command(&mut self, command: VideoCommand) -> Result<()> {
-        match command {
-            VideoCommand::Key { eric, down } => self.write_key_event(eric, down),
-            VideoCommand::Pointer {
-                buttons,
-                x,
-                y,
-                wheel,
-            } => self.write_pointer_event(buttons, x, y, wheel),
-            VideoCommand::VideoSettings { setting, value } => {
-                self.write_video_settings_event(setting, value)
-            }
-        }
     }
 }
 
@@ -405,8 +379,8 @@ mod tests {
         // `RfbVideoSettingsHandler_V01_27.requestVideoColorCalibration`
         // → `writeVideoSettingsEvent(19, 0)` → `[144, 19, 0, 0]`.
         let mut stream = RfbStream::new(Cursor::new(Vec::new()));
-        stream.request_color_calibration().unwrap();
-        stream.request_video_auto_sense().unwrap();
+        stream.write_video_settings_event(19, 0).unwrap();
+        stream.write_video_settings_event(18, 0).unwrap();
         assert_eq!(
             stream.stream.into_inner(),
             vec![144, 19, 0, 0, 144, 18, 0, 0]

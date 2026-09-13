@@ -3,11 +3,10 @@
 //! Reference: decompiled `nn.pp.rccore.impl.rfb.*` plus a decrypted
 //! capture of the Java client. See `docs/rfb.md` for the byte-level map.
 //!
-//! Layout: [`proto`] (message types), [`creds`] (auth pair),
-//! [`framebuffer`] (Raw decode + pixel buffer), [`lrle`] (LRLE tiles),
-//! [`transport`] (TCP/TLS setup), [`handshake`], [`pump`].
+//! Layout: [`proto`] (message types), [`framebuffer`] (Raw decode +
+//! pixel buffer), [`lrle`] (LRLE tiles), [`transport`] (TCP/TLS setup),
+//! [`handshake`], [`pump`].
 
-pub mod creds;
 pub mod framebuffer;
 pub mod handshake;
 pub mod input;
@@ -17,7 +16,6 @@ pub mod pump;
 pub mod stream;
 pub mod transport;
 
-pub use creds::RfbCredentials;
 pub use framebuffer::{Framebuffer, FramebufferRectangle, FramebufferUpdate, PixelFormat};
 pub use input::{VideoCommand, eric_code};
 pub use stream::RfbStream;
@@ -104,7 +102,7 @@ mod tests {
     /// client byte matches the Java client.
     #[test]
     fn handshake_matches_java_client_bytes() {
-        let mut server = Vec::new();
+        use raritan_common::SessionCreds;        let mut server = Vec::new();
         server.extend_from_slice(b"e-RIC RFB 01.29\n");
         server.extend_from_slice(&[32, 0x13]); // auth caps: 1|2|16
         server.extend_from_slice(&[33, 0]); // empty session challenge
@@ -121,7 +119,7 @@ mod tests {
 
         let mut stream = RfbStream::new(FakeStream::new(server));
         let format = stream
-            .handshake(&RfbCredentials::new("s_1", "k2"), "P_1")
+            .handshake(&SessionCreds::new("s_1", "k2"), "P_1")
             .unwrap();
         assert_eq!(format, PixelFormat::RGB565);
         assert_eq!(stream.framebuffer_size(), Some((1024, 768)));

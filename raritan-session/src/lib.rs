@@ -18,16 +18,6 @@ pub struct ConnectionConfig {
     pub password: String,
 }
 
-impl ConnectionConfig {
-    pub fn new(host: &str, user: &str, password: &str) -> Self {
-        Self {
-            host: host.to_owned(),
-            user: user.to_owned(),
-            password: password.to_owned(),
-        }
-    }
-}
-
 /// Finds a port by index, id, id suffix, exact name, or name substring
 /// (same selector language as the CLI `--video` flag).
 ///
@@ -108,9 +98,7 @@ pub fn capture_frames(
 ) -> eyre::Result<(Framebuffer, std::collections::HashSet<i32>, usize)> {
     // Bound headless captures: without a read timeout a stalled target
     // would block `--frames N` forever (the GUI sets 100 ms).
-    let previous_timeout = rfb
-        .inner_read_timeout()
-        .unwrap_or(None);
+    let previous_timeout = rfb.inner_read_timeout().unwrap_or(None);
     rfb.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
     let result = capture_frames_inner(rfb, n);
     // Restore: ignore errors, the stream may be broken anyway.

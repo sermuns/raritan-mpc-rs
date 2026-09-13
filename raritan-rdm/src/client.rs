@@ -92,11 +92,6 @@ impl RdmClient {
         self.database_query(SELECT_IP_REACH_PORTS)
     }
 
-    /// Raw XML of one device subtree (debugging aid).
-    pub fn raw_device(&mut self, device_id: &str) -> eyre::Result<String> {
-        self.database_query(&select_device(device_id))
-    }
-
     pub fn enumerate_ports(&mut self) -> eyre::Result<Vec<crate::Port>> {
         info!("requesting RDM session credentials");
         let session: SessionResponse = from_str(&self.database_query(SELECT_SESSION_ID)?)?;
@@ -114,14 +109,7 @@ impl RdmClient {
         );
 
         let inventory = self.database_query(SELECT_IP_REACH_PORTS)?;
-        let mut ports = parse_ports(&inventory)?;
-        let portal_id = ports
-            .iter()
-            .find(|port| port.class.as_deref() == Some("KVM"))
-            .map(|port| port.id.clone());
-        for port in &mut ports {
-            port.portal_id = portal_id.clone();
-        }
+        let ports = parse_ports(&inventory)?;
         // Fan out to each distinct connected device once (N ports on the
         // same D_… device share one query). Guard against self-references
         // and cycles by skipping already-seen ids.
@@ -136,12 +124,9 @@ impl RdmClient {
             }
         }
 
+        let mut ports = ports;
         for device_id in connections {
-            let mut child_ports = parse_ports(&self.database_query(&select_device(&device_id))?)?;
-            for port in &mut child_ports {
-                port.portal_id = portal_id.clone();
-            }
-            ports.extend(child_ports);
+            ports.extend(parse_ports(&self.database_query(&select_device(&device_id))?)?);
         }
 
         let ports: Vec<_> = ports
@@ -246,21 +231,5 @@ impl RdmClient {
         force: bool,
     ) -> eyre::Result<u8> {
         request_video_grant(&mut self.stream, portal, target, force, TR_GRANT_TIMEOUT)
-    }
-
-    pub fn connect_video_stream_timeout(
-        &mut self,
-        portal: &str,
-        target: &str,
-        force: bool,
-        timeout_secs: u64,
-    ) -> eyre::Result<u8> {
-        request_video_grant(
-            &mut self.stream,
-            portal,
-            target,
-            force,
-            std::time::Duration::from_secs(timeout_secs),
-        )
     }
 }

@@ -6,6 +6,8 @@
 
 use crate::framebuffer::{Framebuffer, FramebufferRectangle, PixelFormat};
 use eyre::{Result, bail, eyre};
+use raritan_common::read_u8;
+use std::io::Cursor;
 
 /// LRLE decoder configuration, mirroring
 /// `ImageDecoderLrle.LRLEColorDecoderConf` `(is_map, is_compact, is_grey,
@@ -107,26 +109,6 @@ fn lrle_colors(conf: &LrleConfig) -> Vec<u32> {
     }
 }
 
-pub(crate) struct SliceReader<'a> {
-    data: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> SliceReader<'a> {
-    pub(crate) fn new(data: &'a [u8]) -> Self {
-        Self { data, offset: 0 }
-    }
-
-    pub(crate) fn read_u8(&mut self) -> Result<u8> {
-        let value = *self
-            .data
-            .get(self.offset)
-            .ok_or_else(|| eyre!("truncated LRLE data"))?;
-        self.offset += 1;
-        Ok(value)
-    }
-}
-
 pub(crate) fn decode_lrle_rect(
     framebuffer: &mut Framebuffer,
     rectangle: &FramebufferRectangle,
@@ -136,9 +118,20 @@ pub(crate) fn decode_lrle_rect(
     // line-copy via prevLine. LRLE colors are format-independent.
     let subencoding = ((rectangle.encoding as u32 >> 12) & 0xf) as usize;
     let conf = lrle_config(subencoding)?;
-    let colors = lrle_colors(&conf);
     let greys = lrle_greys(conf.grey_depth);
-    let mut reader = SliceReader::new(&rectangle.data);
+    // The map path never touches `colors` (up to 32k entries for
+    // depth-15), and grey run paths reuse the grey ramp — build the
+    // color table only when a direct-color run path needs it.
+    let owned_colors;
+    let colors: &[u32] = if conf.map {
+        &[]
+    } else if conf.grey {
+        &greys
+    } else {
+        owned_colors = lrle_colors(&conf);
+        &owned_colors
+    };
+    let mut reader = Cursor::new(rectangle.data.as_slice());
     let width = rectangle.width as usize;
     let height = rectangle.height as usize;
     // Per-tile line-copy state, indexed by column within a 16px tile
@@ -166,7 +159,7 @@ pub(crate) fn decode_lrle_rect(
                 framebuffer,
                 &mut reader,
                 rectangle,
-                &colors,
+                colors,
                 &greys,
                 &conf,
                 &mut previous,
@@ -183,7 +176,7 @@ pub(crate) fn decode_lrle_rect(
 #[allow(clippy::too_many_arguments)]
 fn decode_lrle_run(
     framebuffer: &mut Framebuffer,
-    reader: &mut SliceReader<'_>,
+    reader: &mut Cursor<&[u8]>,
     rectangle: &FramebufferRectangle,
     colors: &[u32],
     greys: &[u32],
@@ -201,12 +194,12 @@ fn decode_lrle_run(
         if column == 0 && row == tile_h {
             break;
         }
-        let code = reader.read_u8()?;
+        let code = read_u8(reader)?;
         let run: usize;
         if code & 0xe0 == 0xe0 {
             copy = true;
             run = if code == 0xff {
-                reader.read_u8()? as usize
+                read_u8(reader)? as usize
             } else {
                 (code & 0x1f) as usize
             };
@@ -229,7 +222,7 @@ fn decode_lrle_run(
             match code >> 6 {
                 0 | 1 => {
                     let index = if conf.depth > 7 {
-                        (u16::from(code) << 8 | u16::from(reader.read_u8()?)) as usize
+                        (u16::from(code) << 8 | u16::from(read_u8(reader)?)) as usize
                     } else {
                         code as usize
                     };
@@ -282,7 +275,7 @@ fn decode_lrle_run(
 #[allow(clippy::too_many_arguments)]
 fn decode_lrle_map(
     framebuffer: &mut Framebuffer,
-    reader: &mut SliceReader<'_>,
+    reader: &mut Cursor<&[u8]>,
     rectangle: &FramebufferRectangle,
     greys: &[u32],
     grey_depth: usize,
@@ -297,38 +290,61 @@ fn decode_lrle_map(
     let group = 8 / grey_depth;
     let mask = (1u32 << grey_depth) - 1;
     for row in 0..tile_h {
-        let full_groups = tile_w / group;
-        let remainder = tile_w % group;
-        for cluster in 0..full_groups {
-            let mut byte = reader.read_u8()?;
-            for k in (0..group).rev() {
-                let index = (u32::from(byte) & mask) as usize;
+        let mut col = 0;
+        while col < tile_w {
+            // Full groups pack `group` pixels per byte; a short tail chunk
+            // packs into the low bits. Either way pixel `j` of the chunk
+            // sits `(chunk - 1 - j)` slots from the LSB (MSB first).
+            let chunk = (tile_w - col).min(group);
+            let byte = read_u8(reader)?;
+            for j in 0..chunk {
+                let index =
+                    ((u32::from(byte) >> ((chunk - 1 - j) * grey_depth)) & mask) as usize;
                 let color = *greys
                     .get(index)
                     .ok_or_else(|| eyre!("invalid LRLE map grey index {index}"))?;
                 framebuffer.put_pixel(
-                    rectangle.x as usize + tile_x + cluster * group + k,
+                    rectangle.x as usize + tile_x + col + j,
                     rectangle.y as usize + tile_y + row,
                     color,
                 );
-                byte >>= grey_depth;
             }
-        }
-        if remainder > 0 {
-            let mut byte = reader.read_u8()?;
-            for k in (0..remainder).rev() {
-                let index = (u32::from(byte) & mask) as usize;
-                let color = *greys
-                    .get(index)
-                    .ok_or_else(|| eyre!("invalid LRLE map grey index {index}"))?;
-                framebuffer.put_pixel(
-                    rectangle.x as usize + tile_x + full_groups * group + k,
-                    rectangle.y as usize + tile_y + row,
-                    color,
-                );
-                byte >>= grey_depth;
-            }
+            col += chunk;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Map path with a non-multiple tile width (6 px, grey_depth 2):
+    /// one full 4-pixel group plus a 2-pixel tail chunk packed in the
+    /// low bits, both MSB first.
+    #[test]
+    fn map_path_handles_remainder_chunk() {
+        let mut framebuffer = Framebuffer::try_new(6, 1).unwrap();
+        decode_lrle_rect(
+            &mut framebuffer,
+            &FramebufferRectangle {
+                x: 0,
+                y: 0,
+                width: 6,
+                height: 1,
+                encoding: 0xA080, // subencoding 10 (2-bit grey map) + HW base
+                data: vec![0x1B, 0x0C],
+            },
+            PixelFormat::RGB565,
+        )
+        .unwrap();
+        // Grey ramp for depth 2 is n*85: 0, 85, 170, 255.
+        assert_eq!(
+            framebuffer.rgba,
+            vec![
+                0, 0, 0, 255, 85, 85, 85, 255, 170, 170, 170, 255, 255, 255, 255, 255, 255, 255,
+                255, 255, 0, 0, 0, 255,
+            ]
+        );
+    }
 }

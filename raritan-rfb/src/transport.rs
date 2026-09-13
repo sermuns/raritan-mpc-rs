@@ -1,10 +1,12 @@
 //! `RfbStream` transport: TCP connect, plaintext vs legacy-TLS setup,
 //! and framebuffer update requests.
 
-use crate::{creds::RfbCredentials, stream::RfbStream};
+use crate::stream::RfbStream;
 use eyre::{Result, WrapErr, bail};
 use openssl::ssl::SslStream;
-use raritan_common::{DEFAULT_RFB_PORT, escape_xml, read_frame, tls_connector, write_frame};
+use raritan_common::{
+    DEFAULT_RFB_PORT, SessionCreds, escape_xml, read_frame, tls_connector, write_frame,
+};
 use std::{
     collections::VecDeque,
     io::{Read, Write},
@@ -47,7 +49,7 @@ impl RfbStream<TcpStream> {
         port: &str,
     ) -> Result<Self> {
         let mut stream = Self::connect(host)?;
-        stream.handshake(&RfbCredentials::new(session_id, session_key), port)?;
+        stream.handshake(&SessionCreds::new(session_id, session_key), port)?;
         Ok(stream)
     }
 
@@ -59,7 +61,7 @@ impl RfbStream<TcpStream> {
     ) -> Result<RfbStream<SslStream<TcpStream>>> {
         let stream = Self::connect_tls_channel(host, session_id)?;
         let mut stream = RfbStream::new(stream);
-        stream.handshake(&RfbCredentials::new(session_id, session_key), port)?;
+        stream.handshake(&SessionCreds::new(session_id, session_key), port)?;
         Ok(stream)
     }
 

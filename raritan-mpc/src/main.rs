@@ -96,49 +96,43 @@ enum FrameMessage {
 
 impl MpcApp {
     fn new(_creation_context: &eframe::CreationContext<'_>) -> Self {
-        match RdmClient::connect(HOST, USER, PASSWORD)
-            .and_then(|mut client| client.enumerate_ports())
-        {
-            Ok(ports) => Self {
-                ports: ports
-                    .into_iter()
-                    .filter(|port| port.status == Some(1))
-                    .collect(),
-                selected_port: None,
-                error: None,
-                connection_status: "Ready".to_owned(),
-                frames: None,
-                cmd_tx: None,
-                texture: None,
-                framebuffer_size: None,
-                show_sidebar: true,
-                sort_order: SortOrder::default(),
-                port_refresh: None,
-                confirm_cad: false,
-                viewport: None,
-                mouse_buttons: 0,
-                last_pointer: None,
-                wheel_remainder: 0.0,
-            },
-            Err(error) => Self {
-                ports: Vec::new(),
-                selected_port: None,
-                error: Some(format!("{error:?}")),
-                connection_status: "Port enumeration failed".to_owned(),
-                frames: None,
-                cmd_tx: None,
-                texture: None,
-                framebuffer_size: None,
-                show_sidebar: true,
-                sort_order: SortOrder::default(),
-                port_refresh: None,
-                confirm_cad: false,
-                viewport: None,
-                mouse_buttons: 0,
-                last_pointer: None,
-                wheel_remainder: 0.0,
-            },
+        let mut app = Self {
+            ports: Vec::new(),
+            selected_port: None,
+            error: None,
+            connection_status: "Ready".to_owned(),
+            frames: None,
+            cmd_tx: None,
+            texture: None,
+            framebuffer_size: None,
+            show_sidebar: true,
+            sort_order: SortOrder::default(),
+            port_refresh: None,
+            confirm_cad: false,
+            viewport: None,
+            mouse_buttons: 0,
+            last_pointer: None,
+            wheel_remainder: 0.0,
+        };
+        match enumerate_active_ports() {
+            Ok(ports) => app.ports = ports,
+            Err(error) => {
+                app.error = Some(error);
+                app.connection_status = "Port enumeration failed".to_owned();
+            }
         }
+        app
+    }
+
+    /// Clears per-session video state (texture, size cache, pointer).
+    /// Used both when starting video and on disconnect.
+    fn clear_frame_state(&mut self) {
+        self.texture = None;
+        self.framebuffer_size = None;
+        self.viewport = None;
+        self.mouse_buttons = 0;
+        self.last_pointer = None;
+        self.wheel_remainder = 0.0;
     }
 
     fn start_video(&mut self, port: &Port) {
@@ -150,16 +144,15 @@ impl MpcApp {
         let (cmd_sender, cmd_receiver) = mpsc::channel();
         self.frames = Some(receiver);
         self.cmd_tx = Some(cmd_sender);
-        self.texture = None;
-        self.framebuffer_size = None;
-        self.viewport = None;
-        self.mouse_buttons = 0;
-        self.last_pointer = None;
-        self.wheel_remainder = 0.0;
+        self.clear_frame_state();
         self.error = None;
         self.connection_status = "Starting framebuffer worker".to_owned();
         thread::spawn(move || {
-            let config = ConnectionConfig::new(HOST, USER, PASSWORD);
+            let config = ConnectionConfig {
+                host: HOST.to_owned(),
+                user: USER.to_owned(),
+                password: PASSWORD.to_owned(),
+            };
             // The pump only exits on error, so a session either runs
             // forever or fails into a retry with backoff. The reboot
             // case (colormap/mode switches) is survived inline; these
@@ -221,16 +214,7 @@ impl MpcApp {
         self.port_refresh = Some(receiver);
         self.connection_status = "Refreshing ports".to_owned();
         thread::spawn(move || {
-            let result = RdmClient::connect(HOST, USER, PASSWORD)
-                .and_then(|mut client| client.enumerate_ports())
-                .map(|ports| {
-                    ports
-                        .into_iter()
-                        .filter(|port| port.status == Some(1))
-                        .collect()
-                })
-                .map_err(|error| format!("{error:?}"));
-            let _ = sender.send(result);
+            let _ = sender.send(enumerate_active_ports());
         });
     }
 
@@ -301,19 +285,14 @@ impl MpcApp {
         let mapped =
             hover.and_then(|pos| self.viewport.and_then(|rect| map_pointer(rect, size, pos)));
         let fallback = self.last_pointer.map(|(_, x, y)| (x, y)).or(Some((0, 0)));
-        if !button_changes.is_empty() {
-            if let Some((x, y)) = mapped.or(fallback) {
-                commands.push(VideoCommand::Pointer {
-                    buttons,
-                    x,
-                    y,
-                    wheel: 0,
-                });
-                self.last_pointer = Some((buttons, x, y));
-            }
-        } else if let Some((x, y)) = mapped
-            && self.last_pointer != Some((buttons, x, y))
-        {
+        // Clicks use the last known position as fallback; plain moves
+        // only go out when the position actually changed.
+        let target: Option<(u16, u16)> = if !button_changes.is_empty() {
+            mapped.or(fallback)
+        } else {
+            mapped.filter(|&(x, y)| self.last_pointer != Some((buttons, x, y)))
+        };
+        if let Some((x, y)) = target {
             commands.push(VideoCommand::Pointer {
                 buttons,
                 x,
@@ -340,6 +319,20 @@ impl MpcApp {
         }
         commands
     }
+}
+
+/// Port enumeration filtered to active ports, shared by startup and
+/// refresh so the connect/filter logic lives in one place.
+fn enumerate_active_ports() -> Result<Vec<Port>, String> {
+    RdmClient::connect(HOST, USER, PASSWORD)
+        .and_then(|mut client| client.enumerate_ports())
+        .map(|ports| {
+            ports
+                .into_iter()
+                .filter(|port| port.status == Some(1))
+                .collect()
+        })
+        .map_err(|error| format!("{error:?}"))
 }
 
 /// One video session: RDM login, RFB handshake, then the pump loop
@@ -549,7 +542,7 @@ fn cad_sequence() -> Vec<VideoCommand> {
 /// as a separate event, exactly like the Java client sends it.
 fn java_key(key: egui::Key) -> Option<(i32, i32)> {
     use egui::Key as K;
-    let mapped = match key {
+    Some(match key {
         K::ArrowUp => (38, 1),
         K::ArrowDown => (40, 1),
         K::ArrowLeft => (37, 1),
@@ -633,8 +626,7 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
         K::F11 => (122, 1),
         K::F12 => (123, 1),
         _ => return None,
-    };
-    Some(mapped)
+    })
 }
 
 impl eframe::App for MpcApp {
@@ -808,16 +800,18 @@ impl eframe::App for MpcApp {
 
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(index) = self.selected_port {
-                let port = &self.ports[index];
+                // Clone for the closure below: it mutates `self`
+                // (via `clear_frame_state`), so it cannot also borrow it.
+                let port_name = self.ports[index]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "Selected port".to_owned());
+                let port_id = self.ports[index].id.clone();
                 ui.horizontal(|ui| {
                     ui.toggle_value(&mut self.show_sidebar, "Ports")
                         .on_hover_text("Show/hide the port sidebar");
-                    ui.heading(port.name.as_deref().unwrap_or("Selected port"));
-                    ui.label(format!("Port ID: {}", port.id));
-                    // Manual video actions, mirroring the Java client's
-                    // Calibrate Color / Auto Sense menu entries. The
-                    // switch auto-calibrates on its own; these are for
-                    // when the picture needs a nudge.
+                    ui.heading(&port_name);
+                    ui.label(format!("Port ID: {port_id}"));
                     if self.cmd_tx.is_some() {
                         // Right-align the buttons.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -828,34 +822,29 @@ impl eframe::App for MpcApp {
                                 // closing the connection.
                                 self.frames = None;
                                 self.cmd_tx = None;
-                                self.texture = None;
-                                self.framebuffer_size = None;
+                                self.clear_frame_state();
                                 self.selected_port = None;
                                 self.confirm_cad = false;
-                                self.viewport = None;
-                                self.mouse_buttons = 0;
-                                self.last_pointer = None;
-                                self.wheel_remainder = 0.0;
                                 self.connection_status = "Disconnected".to_owned();
                             }
                             if ui.button("Ctrl+Alt+Del").clicked() {
                                 self.confirm_cad = true;
                             }
-                            if ui.button("Auto sense").clicked()
-                                && let Some(tx) = &self.cmd_tx
+                            // Manual video actions, mirroring the Java
+                            // client's Calibrate Color / Auto Sense menu
+                            // entries (V01_27 settings table: 18 =
+                            // auto-sense, 19 = color calibration).
+                            for (label, setting) in
+                                [("Auto sense", 18), ("Calibrate color", 19)]
                             {
-                                let _ = tx.send(VideoCommand::VideoSettings {
-                                    setting: 18,
-                                    value: 0,
-                                });
-                            }
-                            if ui.button("Calibrate color").clicked()
-                                && let Some(tx) = &self.cmd_tx
-                            {
-                                let _ = tx.send(VideoCommand::VideoSettings {
-                                    setting: 19,
-                                    value: 0,
-                                });
+                                if ui.button(label).clicked()
+                                    && let Some(tx) = &self.cmd_tx
+                                {
+                                    let _ = tx.send(VideoCommand::VideoSettings {
+                                        setting,
+                                        value: 0,
+                                    });
+                                }
                             }
                         });
                     }

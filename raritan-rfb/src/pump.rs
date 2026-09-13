@@ -80,23 +80,23 @@ impl<S: Read + Write> RfbStream<S> {
         read_u32(&mut self.stream)
     }
 
-    fn write_ping_reply(&mut self, serial: u32) -> Result<()> {
+    fn write_ping(&mut self, kind: u8, serial: u32) -> Result<()> {
+        // Ping messages are 8 bytes: [type,0,0,0,serial:u32].
         let mut message = [0u8; 8];
-        message[0] = PING_REPLY_OUT;
+        message[0] = kind;
         message[4..8].copy_from_slice(&serial.to_be_bytes());
         self.stream.write_all(&message)?;
         self.stream.flush()?;
         Ok(())
     }
 
+    fn write_ping_reply(&mut self, serial: u32) -> Result<()> {
+        self.write_ping(PING_REPLY_OUT, serial)
+    }
+
     /// Client ping request (RfbPingRequestMsgV01_22, 8 bytes).
     pub fn write_ping_request(&mut self, serial: u32) -> Result<()> {
-        let mut message = [0u8; 8];
-        message[0] = PING_REQUEST;
-        message[4..8].copy_from_slice(&serial.to_be_bytes());
-        self.stream.write_all(&message)?;
-        self.stream.flush()?;
-        Ok(())
+        self.write_ping(PING_REQUEST, serial)
     }
 
     fn write_bandwidth_reply(&mut self, stage: u8) -> Result<()> {
@@ -169,13 +169,7 @@ impl<S: Read + Write> RfbStream<S> {
 
     fn read_bandwidth_request(&mut self) -> Result<()> {
         let _pad = read_u8(&mut self.stream)?;
-        let len = read_u16(&mut self.stream)? as usize;
-        if len > MAX_SKIP_BYTES {
-            bail!("bandwidth request too large: {len}");
-        }
-        let mut bytes = vec![0; len];
-        self.stream.read_exact(&mut bytes)?;
-        Ok(())
+        self.skip_blob16()
     }
 
     /// Consume and discard any server message that carries no video data,
