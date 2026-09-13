@@ -10,9 +10,12 @@ use std::{
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-const HOST: &str = "192.168.42.10";
-const USER: &str = "admin";
-const PASSWORD: &str = "admin";
+/// Initial switch address (editable in the UI, persisted afterwards).
+const DEFAULT_HOST: &str = "192.168.42.10";
+/// Factory login; the user/password fields stay disabled unless the
+/// "custom credentials" checkbox is ticked.
+const DEFAULT_USER: &str = "admin";
+const DEFAULT_PASSWORD: &str = "admin";
 
 /// Video sessions attempted per port selection before the worker
 /// surfaces an error (initial try + retries with backoff).
@@ -39,6 +42,13 @@ fn main() -> eframe::Result {
 }
 
 struct MpcApp {
+    /// Switch address, editable in the sidebar and persisted.
+    host: String,
+    /// Login, editable only when `custom_credentials` is ticked.
+    user: String,
+    password: String,
+    /// Enables the user/password fields; off means factory admin/admin.
+    custom_credentials: bool,
     ports: Vec<Port>,
     selected_port: Option<usize>,
     error: Option<String>,
@@ -95,8 +105,17 @@ enum FrameMessage {
 }
 
 impl MpcApp {
-    fn new(_creation_context: &eframe::CreationContext<'_>) -> Self {
+    fn new(creation_context: &eframe::CreationContext<'_>) -> Self {
+        // Restore the last-used connection values via eframe persistence
+        // (ron file under the OS data dir). Missing keys fall back to the
+        // factory defaults.
+        let storage = creation_context.storage;
+        let get = |key: &str| storage.and_then(|storage| storage.get_string(key));
         let mut app = Self {
+            host: get("host").unwrap_or_else(|| DEFAULT_HOST.to_owned()),
+            user: get("username").unwrap_or_else(|| DEFAULT_USER.to_owned()),
+            password: get("password").unwrap_or_else(|| DEFAULT_PASSWORD.to_owned()),
+            custom_credentials: get("custom_credentials").is_some_and(|value| value == "1"),
             ports: Vec::new(),
             selected_port: None,
             error: None,
@@ -112,17 +131,13 @@ impl MpcApp {
             viewport: None,
             mouse_buttons: 0,
             last_pointer: None,
-            wheel_remainder: 0.0,
-        };
-        match enumerate_active_ports() {
-            Ok(ports) => app.ports = ports,
-            Err(error) => {
-                app.error = Some(error);
-                app.connection_status = "Port enumeration failed".to_owned();
-            }
+                wheel_remainder: 0.0,
+            };
+            // Enumerate in the background so a slow/offline switch can't
+            // freeze window creation.
+            app.refresh_ports();
+            app
         }
-        app
-    }
 
     /// Clears per-session video state (texture, size cache, pointer).
     /// Used both when starting video and on disconnect.
@@ -133,6 +148,16 @@ impl MpcApp {
         self.mouse_buttons = 0;
         self.last_pointer = None;
         self.wheel_remainder = 0.0;
+    }
+
+    /// Drops the video session and its UI state, shared by the
+    /// Disconnect button and the Connect (re-target) button.
+    fn disconnect_video(&mut self) {
+        self.frames = None;
+        self.cmd_tx = None;
+        self.clear_frame_state();
+        self.selected_port = None;
+        self.confirm_cad = false;
     }
 
     fn start_video(&mut self, port: &Port) {
@@ -147,11 +172,16 @@ impl MpcApp {
         self.clear_frame_state();
         self.error = None;
         self.connection_status = "Starting framebuffer worker".to_owned();
+        // Snapshot the connection values: later UI edits apply to the
+        // next session, never to the running worker.
+        let host = self.host.clone();
+        let user = self.user.clone();
+        let password = self.password.clone();
         thread::spawn(move || {
             let config = ConnectionConfig {
-                host: HOST.to_owned(),
-                user: USER.to_owned(),
-                password: PASSWORD.to_owned(),
+                host,
+                user,
+                password,
             };
             // The pump only exits on error, so a session either runs
             // forever or fails into a retry with backoff. The reboot
@@ -209,13 +239,25 @@ impl MpcApp {
         if self.port_refresh.is_some() {
             return;
         }
-        info!("refreshing port list");
+        info!(host = %self.host, "refreshing port list");
         let (sender, receiver) = mpsc::channel();
         self.port_refresh = Some(receiver);
         self.connection_status = "Refreshing ports".to_owned();
+        self.error = None;
+        let host = self.host.clone();
+        let user = self.user.clone();
+        let password = self.password.clone();
         thread::spawn(move || {
-            let _ = sender.send(enumerate_active_ports());
+            let _ = sender.send(enumerate_active_ports(&host, &user, &password));
         });
+    }
+
+    /// Re-targets the switch: drops any video session and port list,
+    /// then enumerates the newly entered address.
+    fn reconnect(&mut self) {
+        self.disconnect_video();
+        self.ports.clear();
+        self.refresh_ports();
     }
 
     /// Applies a finished refresh: swaps in the new list, keeps the
@@ -323,8 +365,8 @@ impl MpcApp {
 
 /// Port enumeration filtered to active ports, shared by startup and
 /// refresh so the connect/filter logic lives in one place.
-fn enumerate_active_ports() -> Result<Vec<Port>, String> {
-    RdmClient::connect(HOST, USER, PASSWORD)
+fn enumerate_active_ports(host: &str, user: &str, password: &str) -> Result<Vec<Port>, String> {
+    RdmClient::connect(host, user, password)
         .and_then(|mut client| client.enumerate_ports())
         .map(|ports| {
             ports
@@ -630,6 +672,24 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
 }
 
 impl eframe::App for MpcApp {
+    /// Persists the connection values via eframe's official storage
+    /// (ron file under the OS data dir, written on exit). Note the
+    /// password is stored in plaintext alongside the host/username —
+    /// same exposure as typing it into the CLI flags.
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string("host", self.host.clone());
+        storage.set_string("username", self.user.clone());
+        storage.set_string("password", self.password.clone());
+        storage.set_string(
+            "custom_credentials",
+            if self.custom_credentials {
+                "1".to_owned()
+            } else {
+                String::new()
+            },
+        );
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(receiver) = &self.frames {
             // Drain the backlog but upload only the freshest frame: when
@@ -733,15 +793,49 @@ impl eframe::App for MpcApp {
                 .default_size(220.0)
                 .resizable(false)
                 .show(ui, |ui| {
+                    ui.heading("Switch");
                     ui.horizontal(|ui| {
+                        ui.label("Host:");
+                        ui.text_edit_singleline(&mut self.host);
+                    });
+                    // Unticking restores the factory login; ticking
+                    // enables the fields for editing.
+                    if ui
+                        .checkbox(&mut self.custom_credentials, "Custom credentials")
+                        .changed()
+                        && !self.custom_credentials
+                    {
+                        self.user = DEFAULT_USER.to_owned();
+                        self.password = DEFAULT_PASSWORD.to_owned();
+                    }
+                    ui.add_enabled(
+                        self.custom_credentials,
+                        egui::TextEdit::singleline(&mut self.user).hint_text("Username"),
+                    );
+                    ui.add_enabled(
+                        self.custom_credentials,
+                        egui::TextEdit::singleline(&mut self.password)
+                            .password(true)
+                            .hint_text("Password"),
+                    );
+                    ui.horizontal(|ui| {
+                        let busy = self.port_refresh.is_some();
                         if ui
-                            .add_enabled(self.port_refresh.is_none(), egui::Button::new("Refresh"))
+                            .add_enabled(!busy, egui::Button::new("Connect"))
+                            .on_hover_text("Enumerate ports on the switch above")
+                            .clicked()
+                        {
+                            self.reconnect();
+                        }
+                        if ui
+                            .add_enabled(!busy, egui::Button::new("Refresh"))
                             .on_hover_text("Re-enumerate ports on the switch")
                             .clicked()
                         {
                             self.refresh_ports();
                         }
                     });
+                    ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("Sort by:");
                         egui::ComboBox::from_id_salt("port_sort")
@@ -820,11 +914,7 @@ impl eframe::App for MpcApp {
                                 // worker send fails and the thread exits
                                 // (bounded by the pump's read timeout),
                                 // closing the connection.
-                                self.frames = None;
-                                self.cmd_tx = None;
-                                self.clear_frame_state();
-                                self.selected_port = None;
-                                self.confirm_cad = false;
+                                self.disconnect_video();
                                 self.connection_status = "Disconnected".to_owned();
                             }
                             if ui.button("Ctrl+Alt+Del").clicked() {
