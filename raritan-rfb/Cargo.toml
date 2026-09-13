@@ -11,3 +11,6 @@ flate2.workspace = true
 openssl.workspace = true
 tracing.workspace = true
 raritan-common.workspace = true
+
+[features]
+vendored-openssl = ["openssl/vendored"]

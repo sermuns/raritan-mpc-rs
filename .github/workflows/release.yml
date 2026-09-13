@@ -18,12 +18,12 @@ jobs:
       matrix:
         build:
           - {
-              OS: ubuntu-22.04,
+              OS: ubuntu-latest,
               TOOLCHAIN: stable,
               TARGET: x86_64-unknown-linux-gnu,
             }
           - {
-              OS: windows-2022,
+              OS: windows-latest,
               TOOLCHAIN: stable,
               TARGET: x86_64-pc-windows-msvc,
             }
@@ -63,7 +63,7 @@ jobs:
           shared-key: ${{ matrix.build.TARGET }}
 
       - name: Build raritan-mpc
-        run: cargo build --release --locked -p raritan-mpc --target ${{ matrix.build.TARGET }}
+        run: cargo build --release --locked -p raritan-mpc --target ${{ matrix.build.TARGET }} --features vendored-openssl
 
       - name: Prepare release assets
         shell: bash
@@ -75,6 +75,8 @@ jobs:
             cp target/${{ matrix.build.TARGET }}/release/${{ env.GUI_NAME }} ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
             cp raritan-mpc.desktop ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
           fi
+          cp COPYING NOTICE ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
+          cp -r LICENSES ${{ env.GUI_NAME }}-${{ env.RELEASE_VERSION }}/
 
       - name: Create release artifacts
         shell: bash

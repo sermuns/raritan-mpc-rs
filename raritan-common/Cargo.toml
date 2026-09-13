@@ -11,3 +11,6 @@ base64.workspace = true
 openssl.workspace = true
 quick-xml.workspace = true
 rc4.workspace = true
+
+[features]
+vendored-openssl = ["openssl/vendored"]

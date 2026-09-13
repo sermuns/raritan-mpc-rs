@@ -1,0 +1,7 @@
+raritan-mpc-rs
+Copyright (C) 2026 Samuel Åkesson
+
+This product includes OpenSSL software developed by the OpenSSL
+Project for use in the OpenSSL Toolkit (https://www.openssl.org/),
+which is licensed under the Apache License, Version 2.0.
+See LICENSES/Apache-2.0.txt for the full license text.

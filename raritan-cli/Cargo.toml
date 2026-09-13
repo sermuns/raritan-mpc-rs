@@ -12,3 +12,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 raritan-rdm.workspace = true
 raritan-session.workspace = true
+
+[features]
+vendored-openssl = ["raritan-rdm/vendored-openssl"]

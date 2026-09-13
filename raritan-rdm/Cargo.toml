@@ -12,3 +12,6 @@ quick-xml.workspace = true
 serde.workspace = true
 tracing.workspace = true
 raritan-common.workspace = true
+
+[features]
+vendored-openssl = ["openssl/vendored"]
