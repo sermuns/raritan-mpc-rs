@@ -695,16 +695,17 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
 }
 
 /// Sidebar collapse/expand toggle: the arrow points where the sidebar
-/// goes — ◀ collapses it away, ▶ brings it back.
+/// goes — ◀ collapses it away, ▶ brings it back. Labeled "Sidebar"
+/// (not "Ports") since it holds the switch connection, not just ports.
 fn sidebar_toggle_label(expanded: bool) -> &'static str {
-    if expanded { "◀ Ports" } else { "Ports ▶" }
+    if expanded { "◀ Sidebar" } else { "Sidebar ▶" }
 }
 
 fn sidebar_toggle_hover(expanded: bool) -> &'static str {
     if expanded {
-        "Collapse the port sidebar"
+        "Collapse the sidebar"
     } else {
-        "Expand the port sidebar"
+        "Expand the sidebar"
     }
 }
 
