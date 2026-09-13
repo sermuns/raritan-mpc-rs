@@ -64,23 +64,25 @@ pub fn establish_video(
 ) -> eyre::Result<RfbStream<TcpStream>> {
     info!(%port_id, "connecting RDM video session");
     let started = std::time::Instant::now();
-    // Fetch fresh credentials on this session (also validates the login).
+    // Only credentials are needed here, not the inventory.
     let mut rdm = RdmClient::connect(&config.host, &config.user, &config.password)?;
     info!(elapsed_ms = started.elapsed().as_millis(), "RDM connect done");
-    rdm.enumerate_ports()?;
-    info!(elapsed_ms = started.elapsed().as_millis(), "RDM enumerate done");
+    rdm.fetch_session_credentials()?;
+    info!(elapsed_ms = started.elapsed().as_millis(), "RDM credentials done");
     let (session_id, session_key) = rdm
         .session_credentials()
         .map(|(id, key)| (id.to_owned(), key.to_owned()))?;
     // The Java client always holds the event session while video runs;
-    // video works without it, so a failure only warns.
+    // video works without it, so a failure only warns. The RFB handshake
+    // goes first so its update requests reach the switch ASAP; the event
+    // session then overlaps the switch's first-frame production.
+    info!(%port_id, "connecting RFB session");
+    let mut rfb = RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)?;
+    info!(elapsed_ms = started.elapsed().as_millis(), "RFB handshake done");
     if let Err(error) = rdm.open_event_session(&session_id, &session_key) {
         warn!(%error, "RDM event session failed; continuing without it");
     }
     info!(elapsed_ms = started.elapsed().as_millis(), "RDM event session done");
-    info!(%port_id, "connecting RFB session");
-    let mut rfb = RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)?;
-    info!(elapsed_ms = started.elapsed().as_millis(), "RFB handshake done");
     // Clear any key state stuck down from an earlier session (e.g. a
     // modifier held while the app lost focus or died): the switch keeps
     // per-target key state across connections, so only the target can

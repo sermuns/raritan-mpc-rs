@@ -92,7 +92,10 @@ impl RdmClient {
         self.database_query(SELECT_IP_REACH_PORTS)
     }
 
-    pub fn enumerate_ports(&mut self) -> eyre::Result<Vec<crate::Port>> {
+    /// Fetches just the session credentials (one query). Used by the
+    /// video path, which needs no port inventory — `enumerate_ports`
+    /// would waste several round trips here.
+    pub fn fetch_session_credentials(&mut self) -> eyre::Result<()> {
         info!("requesting RDM session credentials");
         let session: SessionResponse = from_str(&self.database_query(SELECT_SESSION_ID)?)?;
         let data = session.get_session_id;
@@ -107,6 +110,11 @@ impl RdmClient {
             session_key_present = self.session_key.is_some(),
             "received RDM session credentials"
         );
+        Ok(())
+    }
+
+    pub fn enumerate_ports(&mut self) -> eyre::Result<Vec<crate::Port>> {
+        self.fetch_session_credentials()?;
 
         let inventory = self.database_query(SELECT_IP_REACH_PORTS)?;
         let ports = parse_ports(&inventory)?;
