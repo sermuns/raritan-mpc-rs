@@ -1,5 +1,5 @@
-use eframe::egui;
 use clap::Parser;
+use eframe::egui;
 use raritan_rdm::{Port, RdmClient, SwitchInfo};
 use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
 use raritan_session::{ConnectionConfig, establish_video};
@@ -161,8 +161,7 @@ impl MpcApp {
         // (without overwriting what is stored).
         let storage = creation_context.storage;
         let get = |key: &str| storage.and_then(|storage| storage.get_string(key));
-        let mut custom_credentials =
-            get("custom_credentials").is_some_and(|value| value == "1");
+        let mut custom_credentials = get("custom_credentials").is_some_and(|value| value == "1");
         let mut user = get("username").unwrap_or_else(|| DEFAULT_USER.to_owned());
         let mut password = get("password").unwrap_or_else(|| DEFAULT_PASSWORD.to_owned());
         if user_override.is_some() || password_override.is_some() {
@@ -756,9 +755,9 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
 /// Decoded with the `png` crate directly — the only format ever embedded
 /// here — instead of pulling in a full image-codec dependency.
 fn load_app_icon() -> Option<std::sync::Arc<egui::IconData>> {
-    let mut reader = png::Decoder::new(std::io::Cursor::new(
-        include_bytes!("../../media/icon-128.png"),
-    ))
+    let mut reader = png::Decoder::new(std::io::Cursor::new(include_bytes!(
+        "../../media/icon-128.png"
+    )))
     .read_info()
     .ok()?;
     let mut buf = vec![0; reader.output_buffer_size()?];
