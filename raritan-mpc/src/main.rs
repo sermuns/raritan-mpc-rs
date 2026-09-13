@@ -1031,13 +1031,13 @@ impl eframe::App for MpcApp {
                     if self.port_refresh.is_some() {
                         ui.spinner();
                     }
-                    // Footer first: bottom-up claims the sidebar bottom so
-                    // the version stamp can't be pushed off-screen; the
-                    // scroll area then takes whatever space remains.
-                    // (First widget added = bottom-most.)
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    // Footer in a nested bottom panel: unlike a bottom-up
+                    // layout block (whose min_rect reaches the available
+                    // bottom and eats the cursor for everything after it),
+                    // this reserves only its own height, leaving the rest
+                    // for the scroll area below.
+                    egui::Panel::bottom("version").show(ui, |ui| {
                         ui.small(format!("v{} · {}", env!("CARGO_PKG_VERSION"), short_sha()));
-                        ui.separator();
                     });
                     let order = self.port_order();
                     egui::ScrollArea::vertical()
