@@ -2,9 +2,10 @@
 //! changes, framebuffer updates, and skipping everything else.
 
 use crate::{
-    framebuffer::{FramebufferRectangle, FramebufferUpdate, PixelFormat},
+    framebuffer::{FramebufferRectangle, FramebufferUpdate, MAX_FRAMEBUFFER_BYTES, PixelFormat},
     proto::{
         ACK_PIXEL_FORMAT, BANDWIDTH_REPLY, BANDWIDTH_REQUEST, CONNECTION_PARAMETERS,
+        ENCODING_AUTO_HW, ENCODING_LRLE_HARD, ENCODING_LRLE_SOFT, ENCODING_MASK,
         FIX_COLOUR_MAP, FRAMEBUFFER_UPDATE, KEYBOARD_LAYOUT, OSD_STATE, PING_REPLY, PING_REPLY_OUT,
         PING_REQUEST, PORT_LIST, SERVER_COMMAND, SERVER_FB_FORMAT, SERVER_INIT, SERVER_RC_MESSAGE,
         USB_PROFILE_LIST, USER_NOTIFICATION, UTF8_STRING, VIDEO_QUALITY_S2C, VIDEO_SETTINGS_S2C,
@@ -12,11 +13,32 @@ use crate::{
     },
     stream::RfbStream,
 };
-use eyre::{Result, bail};
+use eyre::{Result, bail, eyre};
 use flate2::read::ZlibDecoder;
 use raritan_common::{read_i32, read_u8, read_u16, read_u32};
 use std::io::{Read, Write};
 use tracing::{debug, info, trace, warn};
+
+/// Caps so corrupt length words cannot OOM the process.
+const MAX_UPDATE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RECT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SKIP_BYTES: usize = 1024 * 1024;
+const MAX_RC_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// Rejects zero dimensions and buffers over `MAX_FRAMEBUFFER_BYTES`.
+pub(crate) fn validate_framebuffer_dimensions(width: u16, height: u16) -> Result<()> {
+    if width == 0 || height == 0 {
+        bail!("invalid framebuffer dimensions: {width}x{height}");
+    }
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| eyre!("framebuffer dimensions overflow: {width}x{height}"))?;
+    if len > MAX_FRAMEBUFFER_BYTES {
+        bail!("framebuffer dimensions too large: {width}x{height}");
+    }
+    Ok(())
+}
 
 impl<S: Read + Write> RfbStream<S> {
     pub fn read_message(&mut self) -> Result<FramebufferUpdate> {
@@ -86,10 +108,11 @@ impl<S: Read + Write> RfbStream<S> {
     /// `[18][count][klen,vlen,key,value]*`.
     pub(crate) fn read_connection_parameters(&mut self) -> Result<Vec<(String, String)>> {
         let count = read_u8(&mut self.stream)? as usize;
-        let mut params = Vec::with_capacity(count);
+        let mut params = Vec::with_capacity(count.min(255));
         for _ in 0..count {
             let key_len = read_u8(&mut self.stream)? as usize;
             let value_len = read_u8(&mut self.stream)? as usize;
+            // u8 lengths are at most 255 each; no extra cap needed.
             let mut key = vec![0; key_len];
             let mut value = vec![0; value_len];
             self.stream.read_exact(&mut key)?;
@@ -106,6 +129,9 @@ impl<S: Read + Write> RfbStream<S> {
     pub(crate) fn read_utf8_string(&mut self) -> Result<String> {
         let _pad = read_u8(&mut self.stream)?;
         let len = read_u16(&mut self.stream)? as usize;
+        if len > MAX_SKIP_BYTES {
+            bail!("UTF-8 string too large: {len}");
+        }
         let mut bytes = vec![0; len];
         self.stream.read_exact(&mut bytes)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -119,6 +145,7 @@ impl<S: Read + Write> RfbStream<S> {
         }
         let width = read_u16(&mut self.stream)?;
         let height = read_u16(&mut self.stream)?;
+        validate_framebuffer_dimensions(width, height)?;
         let pixel_format = Self::read_pixel_format(&mut self.stream)?;
         let mut pad = [0; 3];
         self.stream.read_exact(&mut pad)?;
@@ -143,6 +170,9 @@ impl<S: Read + Write> RfbStream<S> {
     fn read_bandwidth_request(&mut self) -> Result<()> {
         let _pad = read_u8(&mut self.stream)?;
         let len = read_u16(&mut self.stream)? as usize;
+        if len > MAX_SKIP_BYTES {
+            bail!("bandwidth request too large: {len}");
+        }
         let mut bytes = vec![0; len];
         self.stream.read_exact(&mut bytes)?;
         Ok(())
@@ -183,6 +213,9 @@ impl<S: Read + Write> RfbStream<S> {
                 let mut header = [0; 5];
                 self.stream.read_exact(&mut header)?;
                 let len = u16::from_be_bytes([header[3], header[4]]) as usize;
+                if len > MAX_SKIP_BYTES {
+                    bail!("OSD text too large: {len}");
+                }
                 let mut text = vec![0; len];
                 self.stream.read_exact(&mut text)?;
                 debug!(message = %String::from_utf8_lossy(&text), "OSD state");
@@ -206,7 +239,11 @@ impl<S: Read + Write> RfbStream<S> {
                 if len < 0 {
                     bail!("invalid server RC message length {len}");
                 }
-                let mut bytes = vec![0; len as usize];
+                let len = len as usize;
+                if len > MAX_RC_MESSAGE_BYTES {
+                    bail!("server RC message too large: {len}");
+                }
+                let mut bytes = vec![0; len];
                 self.stream.read_exact(&mut bytes)?;
                 debug!(message = %String::from_utf8_lossy(&bytes), "server RC message");
             }
@@ -214,6 +251,12 @@ impl<S: Read + Write> RfbStream<S> {
                 let _pad = read_u8(&mut self.stream)?;
                 let name_len = read_u16(&mut self.stream)? as usize;
                 let value_len = read_u16(&mut self.stream)? as usize;
+                let total = name_len
+                    .checked_add(value_len)
+                    .ok_or_else(|| eyre!("server command size overflow"))?;
+                if total > MAX_SKIP_BYTES {
+                    bail!("server command too large: {total}");
+                }
                 let mut name = vec![0; name_len];
                 let mut value = vec![0; value_len];
                 self.stream.read_exact(&mut name)?;
@@ -233,12 +276,14 @@ impl<S: Read + Write> RfbStream<S> {
                 for _ in 0..count {
                     let key_len = read_u8(&mut self.stream)? as usize;
                     let value_len = read_u8(&mut self.stream)? as usize;
+                    // u8 lengths: at most 510 bytes per entry.
                     let mut skip = vec![0; key_len + value_len];
                     self.stream.read_exact(&mut skip)?;
                 }
             }
             VIRTUAL_MEDIA_CONFIG => {
                 let count = read_u8(&mut self.stream)? as usize;
+                // u8 count: at most 255 bytes.
                 let mut rest = vec![0; count];
                 self.stream.read_exact(&mut rest)?;
             }
@@ -250,6 +295,9 @@ impl<S: Read + Write> RfbStream<S> {
 
     fn skip_blob16(&mut self) -> Result<()> {
         let len = read_u16(&mut self.stream)? as usize;
+        if len > MAX_SKIP_BYTES {
+            bail!("RFB skip blob too large: {len}");
+        }
         let mut bytes = vec![0; len];
         self.stream.read_exact(&mut bytes)?;
         Ok(())
@@ -266,7 +314,13 @@ impl<S: Read + Write> RfbStream<S> {
             first,
             count, "received colour map (true-color session; ignoring)"
         );
-        let mut entries = vec![0; count * 6];
+        let bytes = count
+            .checked_mul(6)
+            .ok_or_else(|| eyre!("colour map size overflow"))?;
+        if bytes > MAX_SKIP_BYTES {
+            bail!("colour map too large: {count} entries");
+        }
+        let mut entries = vec![0; bytes];
         self.stream.read_exact(&mut entries)?;
         Ok(())
     }
@@ -274,12 +328,23 @@ impl<S: Read + Write> RfbStream<S> {
     fn skip_port_list(&mut self) -> Result<()> {
         let _pad = read_u8(&mut self.stream)?;
         let count = read_u16(&mut self.stream)? as usize;
+        if count > 4096 {
+            bail!("port list too large: {count} ports");
+        }
         for _ in 0..count {
+            // Per-port fixed header per RfbPortListMsgV01_27.read:
+            // [kvm:u8][vm:u8][idx:u16][nlen:u16][vlen:u16] (8 bytes).
             let mut fixed = [0; 8];
             self.stream.read_exact(&mut fixed)?;
             let name_len = u16::from_be_bytes([fixed[4], fixed[5]]) as usize;
             let value_len = u16::from_be_bytes([fixed[6], fixed[7]]) as usize;
-            let mut rest = vec![0; name_len + value_len];
+            let total = name_len
+                .checked_add(value_len)
+                .ok_or_else(|| eyre!("port list entry size overflow"))?;
+            if total > MAX_SKIP_BYTES {
+                bail!("port list entry too large: {total}");
+            }
+            let mut rest = vec![0; total];
             self.stream.read_exact(&mut rest)?;
         }
         Ok(())
@@ -287,12 +352,21 @@ impl<S: Read + Write> RfbStream<S> {
 
     fn skip_usb_profile_list(&mut self) -> Result<()> {
         let count = read_u16(&mut self.stream)? as usize;
+        if count > 4096 {
+            bail!("USB profile list too large: {count}");
+        }
         for _ in 0..count {
             let name_len = read_u8(&mut self.stream)? as usize;
             let desc_len = read_u16(&mut self.stream)? as usize;
             let mut fixed = [0; 3];
             self.stream.read_exact(&mut fixed)?;
-            let mut rest = vec![0; name_len + desc_len];
+            let total = name_len
+                .checked_add(desc_len)
+                .ok_or_else(|| eyre!("USB profile entry size overflow"))?;
+            if total > MAX_SKIP_BYTES {
+                bail!("USB profile entry too large: {total}");
+            }
+            let mut rest = vec![0; total];
             self.stream.read_exact(&mut rest)?;
         }
         Ok(())
@@ -308,6 +382,12 @@ impl<S: Read + Write> RfbStream<S> {
             update_size,
             "received framebuffer update header"
         );
+        if count > 4096 {
+            bail!("framebuffer update has too many rectangles: {count}");
+        }
+        if update_size > MAX_UPDATE_BYTES {
+            bail!("framebuffer update too large: {update_size}");
+        }
 
         if flags & 1 != 0 {
             let _timestamp_seconds = read_u32(&mut self.stream)?;
@@ -317,15 +397,27 @@ impl<S: Read + Write> RfbStream<S> {
         let mut encoded = vec![0; update_size];
         self.stream.read_exact(&mut encoded)?;
         let payload = if flags & 4 != 0 {
-            let mut decoder = ZlibDecoder::new(encoded.as_slice());
+            // Bound zlib expansion: framebuffer size when known, else the
+            // global framebuffer cap.
+            let limit = self
+                .framebuffer_size
+                .and_then(|(w, h)| (w as usize).checked_mul(h as usize))
+                .and_then(|pixels| pixels.checked_mul(4))
+                .unwrap_or(MAX_FRAMEBUFFER_BYTES)
+                .saturating_add(1024 * 1024)
+                .min(MAX_UPDATE_BYTES + 1024 * 1024);
+            let decoder = ZlibDecoder::new(encoded.as_slice());
             let mut decoded = Vec::new();
-            decoder.read_to_end(&mut decoded)?;
+            decoder.take(limit as u64).read_to_end(&mut decoded)?;
+            if decoded.len() >= limit {
+                bail!("zlib framebuffer payload exceeds limit ({limit} bytes)");
+            }
             decoded
         } else {
             encoded
         };
         let mut reader = std::io::Cursor::new(payload);
-        let mut rectangles = Vec::with_capacity(count);
+        let mut rectangles = Vec::with_capacity(count.min(4096));
         for _ in 0..count {
             let x = read_u16(&mut reader)?;
             let y = read_u16(&mut reader)?;
@@ -333,11 +425,24 @@ impl<S: Read + Write> RfbStream<S> {
             let height = read_u16(&mut reader)?;
             let encoding = read_i32(&mut reader)?;
             let mut size = read_u32(&mut reader)? as usize;
-            let base_encoding = (encoding as u32 & 0xff) as u8;
-            let is_lrle = matches!(base_encoding, 11 | 128);
+            if size > MAX_RECT_BYTES {
+                bail!("framebuffer rect too large: {size}");
+            }
+            let base_encoding = (encoding as u32 & ENCODING_MASK) as u8;
+            let is_lrle = matches!(
+                base_encoding,
+                ENCODING_LRLE_SOFT | ENCODING_LRLE_HARD | ENCODING_AUTO_HW
+            );
             if is_lrle && size == 0 {
                 // Hardware encoding: true size follows.
-                size = read_i32(&mut reader)? as usize;
+                let actual = read_i32(&mut reader)?;
+                if actual < 0 {
+                    bail!("invalid LRLE rect size {actual}");
+                }
+                size = actual as usize;
+                if size > MAX_RECT_BYTES {
+                    bail!("framebuffer rect too large: {size}");
+                }
             }
             if is_lrle && ((encoding as u32 & 0xf00) != 0 || (encoding as u32 & 0x20000) != 0) {
                 bail!("zlib-streamed framebuffer rects are not supported");

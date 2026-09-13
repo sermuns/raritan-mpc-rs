@@ -42,7 +42,7 @@ impl<S: Read + Write> RfbStream<S> {
         }
         let capabilities = read_u8(&mut self.stream)?;
         info!(capabilities, "received RFB authentication capabilities");
-        if capabilities & AUTH_METHOD_RDM_SESSION == 0 {
+        if (capabilities & AUTH_METHOD_RDM_SESSION) == 0 {
             bail!("RFB server does not offer RDM-session authentication");
         }
         // RfbLoginMsgV01_22.write(os, "super", 16, 0).
@@ -115,11 +115,19 @@ impl<S: Read + Write> RfbStream<S> {
                     self.write_pointer_event(0, 0, 0, 0)?;
                     self.write_set_connection_parameter("current_mouse_mode", "absolute")?;
                     self.write_ping_request(0)?;
-                    return Ok(pixel_format);
+                    // We decode Raw rects with the negotiated format, so
+                    // return what is actually in force (RGB565), not the
+                    // server's announcement.
+                    return Ok(PixelFormat::RGB565);
                 }
                 FRAMEBUFFER_UPDATE => {
                     let update = self.read_framebuffer_update()?;
                     warn!("received framebuffer update during handshake; stashing");
+                    // Bound the stash: a malicious server could flood type 0
+                    // before 128 and OOM us.
+                    if self.pending_updates.len() >= 64 {
+                        bail!("too many early framebuffer updates during handshake");
+                    }
                     self.pending_updates.push_back(update);
                 }
                 _ => self.skip_server_message(message_type)?,

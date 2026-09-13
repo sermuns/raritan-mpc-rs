@@ -39,10 +39,12 @@ pub fn event_probe() -> Vec<u8> {
 }
 
 pub fn current_time_millis() -> i32 {
+    // Mirrors Java's 32-bit `int` millisecond clock (wraps roughly every
+    // 24 days). Never panics: a pre-epoch clock yields 0.
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock is before Unix epoch")
-        .as_millis() as i32
+        .map(|duration| duration.as_millis() as u64 as i32)
+        .unwrap_or(0)
 }
 
 /// One-shot RC4 for the `CSC_Test2` challenge/response.

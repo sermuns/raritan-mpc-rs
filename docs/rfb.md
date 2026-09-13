@@ -108,7 +108,7 @@ the server start sending frames.
 | 0 | FramebufferUpdate | `[flags][count:u16][size:u32]` + optional 8 B timestamp (flags&1) + blob (zlib iff flags&4); rects: `[x,y,w,h:u16][enc:i32][size:u32][data]` |
 | 1 | FixColourMapEntries | `[pad][first:u16][count:u16]` + `count`×`[r,g,b:u16]`; sent when the target drops to a palettized mode (e.g. reboot into BIOS). We run true-color, so entries are skipped — the Java client throws here, we survive |
 | 3 | UserNotification | `[kind][pad:u16][code:i32]` |
-| 4 | PortList | `[pad][count:u16]` + per port `[kvm,vm,idx:u16,nlen:u16,vlen:u16,name,value]` |
+| 4 | PortList | `[pad][count:u16]` + per port `[kvm:u8,vm:u8,idx:u16,nlen:u16,vlen:u16,name,value]` (8 B fixed header) |
 | 5 | ServerInit | `[pad×3][server_id:i32]` |
 | 7 | Utf8String | `[pad][len:u16][bytes]` |
 | 8 | VideoSettingsS2C | 27 B blob |

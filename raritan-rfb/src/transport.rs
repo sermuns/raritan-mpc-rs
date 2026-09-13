@@ -33,6 +33,11 @@ impl RfbStream<TcpStream> {
         Ok(())
     }
 
+    /// Current socket read timeout (used to save/restore around captures).
+    pub fn inner_read_timeout(&self) -> Result<Option<std::time::Duration>> {
+        Ok(self.stream.read_timeout()?)
+    }
+
     /// Plaintext video channel on 443, as used by the Java client
     /// (`RemoteConsoleParameters.ssl == false`).
     pub fn connect_raritan(

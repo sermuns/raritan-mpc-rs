@@ -4,7 +4,10 @@
 //! buffer and the Raw path.
 
 use crate::lrle::decode_lrle_rect;
-use eyre::{Result, bail};
+use crate::proto::{
+    ENCODING_AUTO_HW, ENCODING_LRLE_HARD, ENCODING_LRLE_SOFT, ENCODING_MASK, ENCODING_RAW,
+};
+use eyre::{Result, bail, eyre};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FramebufferUpdate {
@@ -60,21 +63,31 @@ pub struct Framebuffer {
 }
 
 /// Hard cap for `width * height * 4` so a corrupt 128 message cannot
-/// OOM the process (max ~33 MB at 4096×2048).
-const MAX_FRAMEBUFFER_BYTES: usize = 64 * 1024 * 1024;
+/// OOM the process (64 MiB; e.g. 4096×4096 RGBA fits, 65535×65535 does not).
+pub const MAX_FRAMEBUFFER_BYTES: usize = 64 * 1024 * 1024;
 
 impl Framebuffer {
-    pub fn new(width: u16, height: u16) -> Self {
-        let len = width as usize * height as usize * 4;
-        assert!(
-            len <= MAX_FRAMEBUFFER_BYTES,
-            "framebuffer dimensions too large: {width}x{height}"
-        );
-        Self {
+    /// Validated constructor: rejects zero dimensions and oversize buffers.
+    pub fn try_new(width: u16, height: u16) -> Result<Self> {
+        if width == 0 || height == 0 {
+            bail!("invalid framebuffer dimensions: {width}x{height}");
+        }
+        let len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| eyre!("framebuffer dimensions overflow: {width}x{height}"))?;
+        if len > MAX_FRAMEBUFFER_BYTES {
+            bail!("framebuffer dimensions too large: {width}x{height}");
+        }
+        Ok(Self {
             width,
             height,
             rgba: vec![0; len],
-        }
+        })
+    }
+
+    pub fn new(width: u16, height: u16) -> Self {
+        Self::try_new(width, height).expect("framebuffer dimensions too large")
     }
 
     pub fn apply_update(
@@ -83,9 +96,11 @@ impl Framebuffer {
         pixel_format: PixelFormat,
     ) -> Result<()> {
         for rectangle in &update.rectangles {
-            match rectangle.encoding & 0xff {
-                0 => self.decode_raw(rectangle, pixel_format)?,
-                11 | 128 | 255 => decode_lrle_rect(self, rectangle, pixel_format)?,
+            match (rectangle.encoding as u32 & ENCODING_MASK) as u8 {
+                ENCODING_RAW => self.decode_raw(rectangle, pixel_format)?,
+                ENCODING_LRLE_SOFT | ENCODING_LRLE_HARD | ENCODING_AUTO_HW => {
+                    decode_lrle_rect(self, rectangle, pixel_format)?
+                }
                 encoding => bail!("unsupported framebuffer encoding {encoding}"),
             }
         }
@@ -93,11 +108,16 @@ impl Framebuffer {
     }
 
     fn decode_raw(&mut self, rectangle: &FramebufferRectangle, format: PixelFormat) -> Result<()> {
-        let bytes_per_pixel = (format.bits_per_pixel / 8) as usize;
-        if !matches!(bytes_per_pixel, 1 | 2 | 4) {
-            bail!("unsupported pixel format: {} bits", format.bits_per_pixel);
-        }
-        let expected = rectangle.width as usize * rectangle.height as usize * bytes_per_pixel;
+        let bytes_per_pixel = match format.bits_per_pixel {
+            8 => 1usize,
+            16 => 2usize,
+            32 => 4usize,
+            other => bail!("unsupported pixel format: {other} bits"),
+        };
+        let expected = (rectangle.width as usize)
+            .checked_mul(rectangle.height as usize)
+            .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
+            .ok_or_else(|| eyre!("raw rectangle size overflow"))?;
         if rectangle.data.len() != expected {
             bail!(
                 "raw rectangle size mismatch: expected {expected}, got {}",
@@ -146,7 +166,7 @@ pub fn rgb(value: u32, format: PixelFormat) -> u32 {
         / u32::from(format.green_max.max(1));
     let blue = ((value >> format.blue_shift) & u32::from(format.blue_max)) * 255
         / u32::from(format.blue_max.max(1));
-    0xff00_0000 | red << 16 | green << 8 | blue
+    0xff00_0000 | (red << 16) | (green << 8) | blue
 }
 
 #[cfg(test)]

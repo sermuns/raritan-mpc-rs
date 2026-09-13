@@ -30,21 +30,39 @@ impl ConnectionConfig {
 
 /// Finds a port by index, id, id suffix, exact name, or name substring
 /// (same selector language as the CLI `--video` flag).
+///
+/// Precedence: exact index → exact id → exact name → id suffix → name
+/// substring. Empty selectors are rejected (they would otherwise match
+/// every port via `contains("")`).
 pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port> {
-    ports
+    if selector.is_empty() {
+        eyre::bail!("empty port selector");
+    }
+    // Exact matches first (deterministic, no ambiguity).
+    if let Some(port) = ports.iter().find(|port| {
+        port.index.is_some_and(|index| index.to_string() == selector)
+            || port.id == selector
+            || port.name.as_deref() == Some(selector)
+    }) {
+        return Ok(port);
+    }
+    // Fuzzy matches: id suffix or name substring. Collect all matches so
+    // ambiguous selectors fail loudly instead of picking port 0.
+    let fuzzy: Vec<&Port> = ports
         .iter()
-        .find(|port| {
-            port.index
-                .is_some_and(|index| index.to_string() == selector)
-                || port.id == selector
-                || port.id.ends_with(selector)
-                || port.name.as_deref() == Some(selector)
+        .filter(|port| {
+            port.id.ends_with(selector)
                 || port
                     .name
                     .as_deref()
                     .is_some_and(|name| name.contains(selector))
         })
-        .ok_or_else(|| eyre::eyre!("no port matches {selector:?}"))
+        .collect();
+    match fuzzy.len() {
+        0 => eyre::bail!("no port matches {selector:?}"),
+        1 => Ok(fuzzy[0]),
+        n => eyre::bail!("{n} ports match {selector:?}; be more specific"),
+    }
 }
 
 /// Opens the full video path: fresh RDM session → credentials → best-effort
@@ -55,9 +73,8 @@ pub fn establish_video(
     port_id: &str,
 ) -> eyre::Result<RfbStream<TcpStream>> {
     info!(%port_id, "connecting RDM video session");
-    let rdm = RdmClient::connect(&config.host, &config.user, &config.password)?;
     // Fetch fresh credentials on this session (also validates the login).
-    let mut rdm = rdm;
+    let mut rdm = RdmClient::connect(&config.host, &config.user, &config.password)?;
     rdm.enumerate_ports()?;
     let (session_id, session_key) = rdm
         .session_credentials()
@@ -81,7 +98,27 @@ pub fn establish_video(
 /// Reads `n` framebuffer updates, applying each to a fresh RGB565
 /// framebuffer and re-requesting incrementally. Returns the framebuffer
 /// plus the set of encodings seen and total rect count.
+///
+/// Non-update messages (pings, OSD, commands) are consumed by the pump but
+/// do not count toward `n`: only messages that actually carry rectangles
+/// advance the capture.
 pub fn capture_frames(
+    rfb: &mut RfbStream<TcpStream>,
+    n: usize,
+) -> eyre::Result<(Framebuffer, std::collections::HashSet<i32>, usize)> {
+    // Bound headless captures: without a read timeout a stalled target
+    // would block `--frames N` forever (the GUI sets 100 ms).
+    let previous_timeout = rfb
+        .inner_read_timeout()
+        .unwrap_or(None);
+    rfb.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    let result = capture_frames_inner(rfb, n);
+    // Restore: ignore errors, the stream may be broken anyway.
+    let _ = rfb.set_read_timeout(previous_timeout);
+    result
+}
+
+fn capture_frames_inner(
     rfb: &mut RfbStream<TcpStream>,
     n: usize,
 ) -> eyre::Result<(Framebuffer, std::collections::HashSet<i32>, usize)> {
@@ -89,11 +126,16 @@ pub fn capture_frames(
         .framebuffer_size()
         .ok_or_eyre("no framebuffer dimensions")?;
     info!(width, height, "handshake complete");
-    let mut framebuffer = Framebuffer::new(width, height);
+    let mut framebuffer = Framebuffer::try_new(width, height)?;
     let mut seen_encodings = std::collections::HashSet::new();
     let mut total_rects = 0usize;
-    for i in 0..n {
+    let mut updates = 0usize;
+    while updates < n {
         let update = rfb.read_message()?;
+        if update.rectangles.is_empty() {
+            continue;
+        }
+        updates += 1;
         // The switch can change resolutions mid-session (text mode ↔
         // graphics on session start): a late 128 adopts new dimensions,
         // and the pixel buffer must follow or rects clip/misalign.
@@ -102,7 +144,7 @@ pub fn capture_frames(
             .ok_or_eyre("framebuffer dimensions lost")?;
         if framebuffer.width != width || framebuffer.height != height {
             info!(width, height, "framebuffer resized; recreating buffer");
-            framebuffer = Framebuffer::new(width, height);
+            framebuffer = Framebuffer::try_new(width, height)?;
         }
         for rect in &update.rectangles {
             seen_encodings.insert(rect.encoding);
@@ -110,7 +152,7 @@ pub fn capture_frames(
         total_rects += update.rectangles.len();
         framebuffer.apply_update(&update, PixelFormat::RGB565)?;
         info!(
-            update = i,
+            update = updates,
             flags = update.flags,
             rects = update.rectangles.len(),
             total_rects,

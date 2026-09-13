@@ -23,12 +23,23 @@ pub const SERVER_FB_FORMAT: u8 = 128;
 pub const SERVER_RC_MESSAGE: u8 = 131;
 pub const SERVER_COMMAND: u8 = 132;
 pub const PING_REQUEST: u8 = 148;
+/// Server ping reply (type 149). The client reply uses the same wire value;
+/// see `PING_REPLY_OUT` alias below.
 pub const PING_REPLY: u8 = 149;
 pub const BANDWIDTH_REQUEST: u8 = 150;
 pub const VM_MOUNTS_RESPONSE: u8 = 166;
 pub const VM_SHARE_TABLE: u8 = 167;
 pub const VIRTUAL_MEDIA_CONFIG: u8 = 168;
 pub const USB_PROFILE_LIST: u8 = 170;
+
+// Framebuffer encodings (low byte of the i32 rect encoding).
+pub const ENCODING_RAW: u8 = 0;
+pub const ENCODING_LRLE_SOFT: u8 = 11;
+pub const ENCODING_LRLE_HARD: u8 = 128;
+/// Auto hardware encoding (`rfbEncodingAutoHw` in Java) — decoded as LRLE.
+pub const ENCODING_AUTO_HW: u8 = 255;
+/// Mask for the low encoding byte of the i32 rect encoding.
+pub const ENCODING_MASK: u32 = 0xff;
 
 // Client → server.
 pub const SET_PIXEL_FORMAT: u8 = 0;
@@ -43,6 +54,7 @@ pub const POINTER_EVENT: u8 = 5;
 pub const MOUSE_SYNC_EVENT: u8 = 134;
 pub const KVM_SWITCH_EVENT: u8 = 137;
 pub const VIDEO_SETTINGS_REQUEST: u8 = 145;
+/// Client ping reply: same wire value as server `PING_REPLY` (149).
 pub const PING_REPLY_OUT: u8 = 149;
 pub const BANDWIDTH_REPLY: u8 = 151;
 pub const SET_CONNECTION_PARAMETER: u8 = 155;

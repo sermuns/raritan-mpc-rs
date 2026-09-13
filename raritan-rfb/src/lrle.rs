@@ -141,7 +141,9 @@ pub(crate) fn decode_lrle_rect(
     let mut reader = SliceReader::new(&rectangle.data);
     let width = rectangle.width as usize;
     let height = rectangle.height as usize;
-    let mut previous = vec![0u32; framebuffer.width as usize];
+    // Per-tile line-copy state, indexed by column within a 16px tile
+    // (mirrors Java's `prevLine`, which is tile-scoped).
+    let mut previous = [0u32; 16];
     for tile_y in (0..height).step_by(16) {
         for tile_x in (0..width).step_by(16) {
             let tile_w = (width - tile_x).min(16);
@@ -211,10 +213,16 @@ fn decode_lrle_run(
         } else if conf.compact {
             copy = false;
             if conf.depth <= 3 {
-                color = colors[(code & 7) as usize];
+                let index = (code & 7) as usize;
+                color = *colors
+                    .get(index)
+                    .ok_or_else(|| eyre!("invalid LRLE compact color index {index}"))?;
                 run = (code >> 3) as usize;
             } else {
-                color = colors[(code & 0xf) as usize];
+                let index = (code & 0xf) as usize;
+                color = *colors
+                    .get(index)
+                    .ok_or_else(|| eyre!("invalid LRLE compact color index {index}"))?;
                 run = (code >> 4) as usize;
             }
         } else {
@@ -225,12 +233,17 @@ fn decode_lrle_run(
                     } else {
                         code as usize
                     };
-                    color = colors[index];
+                    color = *colors
+                        .get(index)
+                        .ok_or_else(|| eyre!("invalid LRLE color index {index}"))?;
                     run = 0;
                     copy = false;
                 }
                 2 => {
-                    color = greys[(code & 0x3f) as usize];
+                    let index = (code & 0x3f) as usize;
+                    color = *greys
+                        .get(index)
+                        .ok_or_else(|| eyre!("invalid LRLE grey index {index}"))?;
                     run = 0;
                     copy = false;
                 }
@@ -239,6 +252,12 @@ fn decode_lrle_run(
                 }
             }
         }
+        // Bound the run to the remaining pixels in this tile so a corrupt
+        // run cannot paint past the tile edge (put_pixel clipping would
+        // otherwise hide the overrun and desync the stream).
+        let painted = row * tile_w + column;
+        let remaining = tile_w * tile_h - painted;
+        let run = run.min(remaining.saturating_sub(1));
         for _ in 0..=run {
             if !copy {
                 previous[column] = color;
@@ -272,6 +291,9 @@ fn decode_lrle_map(
     tile_w: usize,
     tile_h: usize,
 ) -> Result<()> {
+    if grey_depth == 0 || grey_depth > 8 {
+        bail!("invalid LRLE grey depth {grey_depth}");
+    }
     let group = 8 / grey_depth;
     let mask = (1u32 << grey_depth) - 1;
     for row in 0..tile_h {
@@ -280,7 +302,10 @@ fn decode_lrle_map(
         for cluster in 0..full_groups {
             let mut byte = reader.read_u8()?;
             for k in (0..group).rev() {
-                let color = greys[(u32::from(byte) & mask) as usize];
+                let index = (u32::from(byte) & mask) as usize;
+                let color = *greys
+                    .get(index)
+                    .ok_or_else(|| eyre!("invalid LRLE map grey index {index}"))?;
                 framebuffer.put_pixel(
                     rectangle.x as usize + tile_x + cluster * group + k,
                     rectangle.y as usize + tile_y + row,
@@ -292,7 +317,10 @@ fn decode_lrle_map(
         if remainder > 0 {
             let mut byte = reader.read_u8()?;
             for k in (0..remainder).rev() {
-                let color = greys[(u32::from(byte) & mask) as usize];
+                let index = (u32::from(byte) & mask) as usize;
+                let color = *greys
+                    .get(index)
+                    .ok_or_else(|| eyre!("invalid LRLE map grey index {index}"))?;
                 framebuffer.put_pixel(
                     rectangle.x as usize + tile_x + full_groups * group + k,
                     rectangle.y as usize + tile_y + row,

@@ -144,7 +144,9 @@ impl MpcApp {
     fn start_video(&mut self, port: &Port) {
         let port_id = port.id.clone();
         info!(%port_id, "starting framebuffer worker");
-        let (sender, receiver) = mpsc::channel();
+        // Bounded channel: backpressure instead of unbounded 3 MiB/frame
+        // growth when the network outruns the 33 ms repaint.
+        let (sender, receiver) = mpsc::sync_channel(2);
         let (cmd_sender, cmd_receiver) = mpsc::channel();
         self.frames = Some(receiver);
         self.cmd_tx = Some(cmd_sender);
@@ -346,7 +348,7 @@ impl MpcApp {
 fn run_video_session(
     config: &ConnectionConfig,
     port_id: &str,
-    sender: &mpsc::Sender<FrameMessage>,
+    sender: &mpsc::SyncSender<FrameMessage>,
     cmd_receiver: &mpsc::Receiver<VideoCommand>,
 ) -> eyre::Result<()> {
     let status = |message: &str| {
@@ -365,7 +367,7 @@ fn run_video_session(
         .framebuffer_size()
         .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
     let format = PixelFormat::RGB565;
-    let mut framebuffer = Framebuffer::new(width, height);
+    let mut framebuffer = Framebuffer::try_new(width, height)?;
     // Short read timeout so queued input events are flushed promptly
     // even when the server sends nothing. NOTE: this must stay
     // generous — firing mid-framebuffer-update discards partial bytes
@@ -376,37 +378,53 @@ fn run_video_session(
     // key is released so a dropped connection can never leave the
     // target with a key stuck down (which the VM would repeat forever).
     let mut held: Vec<u16> = Vec::new();
+    let mut dropped_frames: u64 = 0;
     let result = (|| -> eyre::Result<()> {
         loop {
-            while let Ok(command) = cmd_receiver.try_recv() {
-                match command {
-                    VideoCommand::Key { eric, down } => {
-                        rfb.write_key_event(eric, down)?;
-                        if down {
-                            if !held.contains(&eric) {
-                                held.push(eric);
+            // Drain ALL queued input first: input has priority over video
+            // and every event (key/mouse) is sent through, never dropped.
+            loop {
+                match cmd_receiver.try_recv() {
+                    Ok(command) => match command {
+                        VideoCommand::Key { eric, down } => {
+                            rfb.write_key_event(eric, down)?;
+                            if down {
+                                if !held.contains(&eric) {
+                                    held.push(eric);
+                                }
+                            } else if let Some(index) =
+                                held.iter().position(|held| *held == eric)
+                            {
+                                held.swap_remove(index);
                             }
-                        } else if let Some(index) = held.iter().position(|held| *held == eric) {
-                            held.swap_remove(index);
                         }
-                    }
-                    VideoCommand::VideoSettings { setting, value } => {
-                        info!(setting, value, "sending video-settings event");
-                        rfb.write_video_settings_event(setting, value)?;
-                    }
-                    VideoCommand::Pointer {
-                        buttons,
-                        x,
-                        y,
-                        wheel,
-                    } => {
-                        tracing::trace!(buttons, x, y, wheel, "sending pointer event");
-                        rfb.write_pointer_event(buttons, x, y, wheel)?;
+                        VideoCommand::VideoSettings { setting, value } => {
+                            info!(setting, value, "sending video-settings event");
+                            rfb.write_video_settings_event(setting, value)?;
+                        }
+                        VideoCommand::Pointer {
+                            buttons,
+                            x,
+                            y,
+                            wheel,
+                        } => {
+                            tracing::trace!(buttons, x, y, wheel, "sending pointer event");
+                            rfb.write_pointer_event(buttons, x, y, wheel)?;
+                        }
+                    },
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        // GUI dropped cmd_tx (Disconnect/reselect): exit so the
+                        // thread does not survive indefinitely when idle.
+                        info!("video worker: command channel closed; exiting");
+                        return Ok(());
                     }
                 }
             }
             let update = match rfb.read_message() {
                 Ok(update) => update,
+                // Idle poll: loop back to the top, which observes command
+                // channel disconnects within one timeout window.
                 Err(error) if is_read_timeout(&error) => continue,
                 Err(error) => return Err(error),
             };
@@ -417,7 +435,7 @@ fn run_video_session(
                 && (framebuffer.width != width || framebuffer.height != height)
             {
                 info!(width, height, "framebuffer resized; recreating buffer");
-                framebuffer = Framebuffer::new(width, height);
+                framebuffer = Framebuffer::try_new(width, height)?;
             }
             info!(
                 rectangles = update.rectangles.len(),
@@ -425,11 +443,28 @@ fn run_video_session(
                 "decoded framebuffer update"
             );
             framebuffer.apply_update(&update, format)?;
-            sender.send(FrameMessage::Frame {
+            // Never block the pump on the GUI: if it is behind, drop this
+            // frame (framedrops are fine; low latency is what matters) and
+            // keep the loop running so input stays responsive. Only a
+            // closed receiver (Disconnect/reselect) exits the worker.
+            match sender.try_send(FrameMessage::Frame {
                 width: framebuffer.width,
                 height: framebuffer.height,
                 rgba: framebuffer.rgba.clone(),
-            })?;
+            }) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(_)) => {
+                    dropped_frames += 1;
+                    tracing::trace!(
+                        dropped_frames,
+                        "dropped video frame; GUI behind, keeping latency low"
+                    );
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    info!("video worker: frame receiver closed; exiting");
+                    return Ok(());
+                }
+            }
             rfb.request_framebuffer_update(true)?;
         }
     })();
@@ -444,12 +479,15 @@ fn run_video_session(
 /// True when the error is just the worker's read timeout expiring
 /// (no server data within the poll window), as opposed to a real failure.
 fn is_read_timeout(error: &eyre::Report) -> bool {
-    error.downcast_ref::<std::io::Error>().is_some_and(|io| {
-        matches!(
-            io.kind(),
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-        )
-    })
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            )
+        })
 }
 
 /// RFB button bit for an egui pointer button (standard mask: bit 0

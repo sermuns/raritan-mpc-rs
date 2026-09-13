@@ -126,6 +126,9 @@ pub fn request_video_grant(
         .get_ref()
         .set_read_timeout(Some(TR_GRANT_POLL_TIMEOUT))?;
     loop {
+        if std::time::Instant::now() >= deadline {
+            eyre::bail!("timed out waiting for video-stream response");
+        }
         let response = match read_tr_command(stream) {
             Ok(response) => response,
             Err(error) => {

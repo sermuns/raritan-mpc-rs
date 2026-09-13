@@ -59,9 +59,13 @@ fn main() -> color_eyre::Result<()> {
 
     let ports = client.enumerate_ports()?;
     for port in &ports {
+        let index = port
+            .index
+            .map(|index| index.to_string())
+            .unwrap_or_else(|| "-".to_owned());
         println!(
             "{:>3} {:<28} {:<12} id={:?} status={:?} available={:?}",
-            port.index.unwrap_or(0),
+            index,
             port.name.as_deref().unwrap_or(""),
             port.r#type.as_deref().unwrap_or(""),
             port.id,
@@ -96,10 +100,6 @@ fn main() -> color_eyre::Result<()> {
 
 fn dump_inventory_xml(client: &mut RdmClient, path: &str) -> color_eyre::Result<()> {
     let mut xml = client.raw_inventory()?;
-    for device in ["D_000d5d065096", "D_000d5d065095"] {
-        xml.push_str(&format!("\n<!-- {device} -->\n"));
-        xml.push_str(&client.raw_device(device)?);
-    }
     for query in [
         "<Database><Get><Select>/System/Device[@Type='IP-Reach']/DeviceCapabilities</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>",
         "<Database><Get><Select>/System/Device</Select><Nodes> Device </Nodes><SubNodes> Name SerialNo @id @Type @Model @BM @BaseDevice @CalibrationSpeed @ProductCode</SubNodes></Get></Database>",

@@ -45,13 +45,18 @@ impl RdmClient {
         tls_connector()?.connect(host, stream).map_err(Into::into)
     }
 
+    fn tls_channel(host: &str, protocol: &str, session: Option<&str>) -> eyre::Result<(SslStream<TcpStream>, Vec<u8>)> {
+        let mut plain = Self::tcp_connect(host)?;
+        let info = csc_start_session(&mut plain, protocol, session)?;
+        let tls = Self::tls_upgrade(host, plain)?;
+        Ok((tls, info))
+    }
+
     pub fn connect(host: impl Into<String>, user: &str, password: &str) -> eyre::Result<Self> {
         let host = host.into();
         info!(%host, "connecting to RDM control channel");
-        let mut plain = Self::tcp_connect(&host)?;
-        let info = csc_start_session(&mut plain, "RDM", None)?;
+        let (mut tls, info) = Self::tls_channel(&host, "RDM", None)?;
         debug!(length = info.len(), "received CSC info");
-        let mut tls = Self::tls_upgrade(&host, plain)?;
         csc_auth(&mut tls, user, password)?;
         info!(%host, "RDM authentication succeeded");
         Ok(Self {
@@ -65,9 +70,7 @@ impl RdmClient {
     /// Opens the CSC+TLS channel without authenticating (diagnostic aid).
     pub fn connect_unauthed(host: impl Into<String>) -> eyre::Result<Self> {
         let host = host.into();
-        let mut plain = Self::tcp_connect(&host)?;
-        csc_start_session(&mut plain, "RDM", None)?;
-        let tls = Self::tls_upgrade(&host, plain)?;
+        let (tls, _) = Self::tls_channel(&host, "RDM", None)?;
         Ok(Self {
             stream: tls,
             host,
@@ -119,10 +122,19 @@ impl RdmClient {
         for port in &mut ports {
             port.portal_id = portal_id.clone();
         }
-        let connections: Vec<String> = ports
-            .iter()
-            .filter_map(|port| port.connection.clone())
-            .collect();
+        // Fan out to each distinct connected device once (N ports on the
+        // same D_… device share one query). Guard against self-references
+        // and cycles by skipping already-seen ids.
+        let mut seen_devices = std::collections::HashSet::new();
+        let mut connections: Vec<String> = Vec::new();
+        for port in &ports {
+            if let Some(connection) = port.connection.clone()
+                && connection != port.device_id.as_deref().unwrap_or("")
+                && seen_devices.insert(connection.clone())
+            {
+                connections.push(connection);
+            }
+        }
 
         for device_id in connections {
             let mut child_ports = parse_ports(&self.database_query(&select_device(&device_id))?)?;
@@ -171,8 +183,18 @@ impl RdmClient {
         let mut tls = Self::tls_upgrade(&self.host, socket)?;
         csc_test2(&mut tls, session_key)?;
         info!("RDM event session established");
+        // NOTE: this spawns a detached drain thread that owns the event
+        // socket for the lifetime of the video session (mirrors Java's
+        // always-on event loop). Callers that retry `establish_video`
+        // should be aware each attempt opens one more session.
         std::thread::spawn(move || {
-            let _ = tls.get_ref().set_read_timeout(Some(EVENT_DRAIN_TIMEOUT));
+            if let Err(error) = tls
+                .get_ref()
+                .set_read_timeout(Some(EVENT_DRAIN_TIMEOUT))
+            {
+                info!(error = %format!("{error:#}"), "RDM event drain: cannot set read timeout; exiting");
+                return;
+            }
             loop {
                 match read_frame(&mut tls) {
                     Ok(frame) => info!(
@@ -181,12 +203,17 @@ impl RdmClient {
                         "RDM event",
                     ),
                     Err(error) => {
-                        let idle = error.downcast_ref::<std::io::Error>().is_some_and(|io| {
-                            matches!(
-                                io.kind(),
-                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                            )
-                        });
+                        // Walk the eyre chain: SslStream errors may wrap the
+                        // underlying io error instead of exposing it directly.
+                        let idle = error
+                            .chain()
+                            .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                            .is_some_and(|io| {
+                                matches!(
+                                    io.kind(),
+                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                                )
+                            });
                         if !idle {
                             info!(error = %format!("{error:#}"), "RDM event session closed");
                             return;
