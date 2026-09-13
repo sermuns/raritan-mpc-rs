@@ -6,9 +6,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+clap.workspace = true
 eyre.workspace = true
 eframe.workspace = true
-png = "0.18"
+png.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 raritan-rdm.workspace = true

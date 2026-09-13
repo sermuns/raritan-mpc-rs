@@ -2280,6 +2280,7 @@ dependencies = [
 name = "raritan-mpc"
 version = "1.2.1"
 dependencies = [
+ "clap",
  "eframe",
  "eyre",
  "png",

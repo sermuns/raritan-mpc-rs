@@ -1,4 +1,5 @@
 use eframe::egui;
+use clap::Parser;
 use raritan_rdm::{Port, RdmClient, SwitchInfo};
 use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
 use raritan_session::{ConnectionConfig, establish_video};
@@ -21,6 +22,23 @@ const DEFAULT_PASSWORD: &str = "admin";
 /// surfaces an error (initial try + retries with backoff).
 const MAX_VIDEO_ATTEMPTS: u32 = 4;
 
+/// Command-line overrides for this run. `--help`/`--version` print and
+/// exit without opening a window; the connection flags override the
+/// persisted sidebar values without overwriting them.
+#[derive(Parser)]
+#[command(version, about = "Raritan MPC graphical KVM client")]
+struct Args {
+    /// Switch address (e.g. 192.168.42.10).
+    #[arg(long)]
+    host: Option<String>,
+    /// Login username.
+    #[arg(long)]
+    user: Option<String>,
+    /// Login password.
+    #[arg(long)]
+    password: Option<String>,
+}
+
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -29,6 +47,7 @@ fn main() -> eframe::Result {
         .with_target(false)
         .init();
     info!("starting Raritan MPC");
+    let args = Args::parse();
     let mut viewport = egui::ViewportBuilder::default();
     match load_app_icon() {
         Some(icon) => viewport = viewport.with_icon(icon),
@@ -43,7 +62,14 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Raritan MPC",
         native_options,
-        Box::new(|creation_context| Ok(Box::new(MpcApp::new(creation_context)))),
+        Box::new(move |creation_context| {
+            Ok(Box::new(MpcApp::new(
+                creation_context,
+                args.host,
+                args.user,
+                args.password,
+            )))
+        }),
     )
 }
 
@@ -123,17 +149,38 @@ enum FrameMessage {
 }
 
 impl MpcApp {
-    fn new(creation_context: &eframe::CreationContext<'_>) -> Self {
+    fn new(
+        creation_context: &eframe::CreationContext<'_>,
+        host_override: Option<String>,
+        user_override: Option<String>,
+        password_override: Option<String>,
+    ) -> Self {
         // Restore the last-used connection values via eframe persistence
         // (ron file under the OS data dir). Missing keys fall back to the
-        // factory defaults.
+        // factory defaults; command-line flags win over both for this run
+        // (without overwriting what is stored).
         let storage = creation_context.storage;
         let get = |key: &str| storage.and_then(|storage| storage.get_string(key));
+        let mut custom_credentials =
+            get("custom_credentials").is_some_and(|value| value == "1");
+        let mut user = get("username").unwrap_or_else(|| DEFAULT_USER.to_owned());
+        let mut password = get("password").unwrap_or_else(|| DEFAULT_PASSWORD.to_owned());
+        if user_override.is_some() || password_override.is_some() {
+            if let Some(user_flag) = user_override {
+                user = user_flag;
+            }
+            if let Some(password_flag) = password_override {
+                password = password_flag;
+            }
+            custom_credentials = true;
+        }
         let mut app = Self {
-            host: get("host").unwrap_or_else(|| DEFAULT_HOST.to_owned()),
-            user: get("username").unwrap_or_else(|| DEFAULT_USER.to_owned()),
-            password: get("password").unwrap_or_else(|| DEFAULT_PASSWORD.to_owned()),
-            custom_credentials: get("custom_credentials").is_some_and(|value| value == "1"),
+            host: host_override
+                .or_else(|| get("host"))
+                .unwrap_or_else(|| DEFAULT_HOST.to_owned()),
+            user,
+            password,
+            custom_credentials,
             ports: Vec::new(),
             selected_port: None,
             error: None,
