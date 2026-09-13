@@ -18,6 +18,3 @@ raritan-session.workspace = true
 
 [features]
 vendored-openssl = ["raritan-rdm/vendored-openssl", "raritan-rfb/vendored-openssl"]
-
-[build-dependencies]
-vergen-gitcl = "10"
