@@ -63,9 +63,12 @@ pub fn establish_video(
     port_id: &str,
 ) -> eyre::Result<RfbStream<TcpStream>> {
     info!(%port_id, "connecting RDM video session");
+    let started = std::time::Instant::now();
     // Fetch fresh credentials on this session (also validates the login).
     let mut rdm = RdmClient::connect(&config.host, &config.user, &config.password)?;
+    info!(elapsed_ms = started.elapsed().as_millis(), "RDM connect done");
     rdm.enumerate_ports()?;
+    info!(elapsed_ms = started.elapsed().as_millis(), "RDM enumerate done");
     let (session_id, session_key) = rdm
         .session_credentials()
         .map(|(id, key)| (id.to_owned(), key.to_owned()))?;
@@ -74,14 +77,16 @@ pub fn establish_video(
     if let Err(error) = rdm.open_event_session(&session_id, &session_key) {
         warn!(%error, "RDM event session failed; continuing without it");
     }
+    info!(elapsed_ms = started.elapsed().as_millis(), "RDM event session done");
     info!(%port_id, "connecting RFB session");
     let mut rfb = RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)?;
+    info!(elapsed_ms = started.elapsed().as_millis(), "RFB handshake done");
     // Clear any key state stuck down from an earlier session (e.g. a
     // modifier held while the app lost focus or died): the switch keeps
     // per-target key state across connections, so only the target can
     // release it. Releases are no-ops for keys that aren't down.
     rfb.release_all_keys()?;
-    info!(%port_id, "cleared stuck keys");
+    info!(elapsed_ms = started.elapsed().as_millis(), "cleared stuck keys");
     Ok(rfb)
 }
 
@@ -118,12 +123,19 @@ fn capture_frames_inner(
     let mut seen_encodings = std::collections::HashSet::new();
     let mut total_rects = 0usize;
     let mut updates = 0usize;
+    let waiting = std::time::Instant::now();
     while updates < n {
         let update = rfb.read_message()?;
         if update.rectangles.is_empty() {
             continue;
         }
         updates += 1;
+        if updates == 1 {
+            info!(
+                elapsed_ms = waiting.elapsed().as_millis(),
+                "first framebuffer update received"
+            );
+        }
         // The switch can change resolutions mid-session (text mode ↔
         // graphics on session start): a late 128 adopts new dimensions,
         // and the pixel buffer must follow or rects clip/misalign.

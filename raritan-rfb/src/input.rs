@@ -97,9 +97,14 @@ impl<S: Read + Write> RfbStream<S> {
     /// itself sends defensive releases), so this is safe to run on
     /// every connect.
     pub fn release_all_keys(&mut self) -> Result<()> {
-        for eric in 0..=137 {
-            self.write_key_event(eric, false)?;
+        // All 138 release messages in a single write: same bytes as 138
+        // individual key events, without 138 tiny packets per connect.
+        let mut batch = Vec::with_capacity(138 * 4);
+        for eric in 0..=137u16 {
+            batch.extend_from_slice(&[KEY_EVENT, 0, (eric >> 8) as u8, eric as u8]);
         }
+        self.stream.write_all(&batch)?;
+        self.stream.flush()?;
         Ok(())
     }
 }
