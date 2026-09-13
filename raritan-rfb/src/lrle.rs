@@ -298,8 +298,7 @@ fn decode_lrle_map(
             let chunk = (tile_w - col).min(group);
             let byte = read_u8(reader)?;
             for j in 0..chunk {
-                let index =
-                    ((u32::from(byte) >> ((chunk - 1 - j) * grey_depth)) & mask) as usize;
+                let index = ((u32::from(byte) >> ((chunk - 1 - j) * grey_depth)) & mask) as usize;
                 let color = *greys
                     .get(index)
                     .ok_or_else(|| eyre!("invalid LRLE map grey index {index}"))?;

@@ -391,12 +391,9 @@ impl MpcApp {
 
 /// Port enumeration filtered to active ports, shared by startup and
 /// refresh so the connect/filter logic lives in one place.
-fn enumerate_active_ports(
-    host: &str,
-    user: &str,
-    password: &str,
-) -> RefreshResult {
-    let mut client = RdmClient::connect(host, user, password).map_err(|error| format!("{error:?}"))?;
+fn enumerate_active_ports(host: &str, user: &str, password: &str) -> RefreshResult {
+    let mut client =
+        RdmClient::connect(host, user, password).map_err(|error| format!("{error:?}"))?;
     let ports = client
         .enumerate_ports()
         .map(|ports| {
@@ -722,7 +719,11 @@ fn short_sha() -> String {
 /// goes — ◀ collapses it away, ▶ brings it back. Labeled "Sidebar"
 /// (not "Ports") since it holds the switch connection, not just ports.
 fn sidebar_toggle_label(expanded: bool) -> &'static str {
-    if expanded { "◀ Sidebar" } else { "Sidebar ▶" }
+    if expanded {
+        "◀ Sidebar"
+    } else {
+        "Sidebar ▶"
+    }
 }
 
 fn sidebar_toggle_hover(expanded: bool) -> &'static str {
@@ -958,37 +959,40 @@ impl eframe::App for MpcApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .show(ui, |ui| {
-                        egui::Grid::new("port_list")
-                            .striped(true)
-                            .num_columns(1)
-                            .show(ui, |ui| {
-                                for index in order {
-                                    let port = &self.ports[index];
-                                    let label = format!(
-                                        "{}  {}",
-                                        port.index.map_or_else(
-                                            || "?".to_owned(),
-                                            |value| value.to_string()
-                                        ),
-                                        port.name.as_deref().unwrap_or(&port.id),
-                                    );
-                                    if ui
-                                        .selectable_label(self.selected_port == Some(index), label)
-                                        .clicked()
-                                    {
-                                        self.selected_port = Some(index);
-                                        let selected_port = port.clone();
-                                        self.start_video(&selected_port);
-                                        // Drop focus so Space/Enter go to the KVM
-                                        // target instead of re-activating this label.
-                                        if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
-                                            ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
+                            egui::Grid::new("port_list")
+                                .striped(true)
+                                .num_columns(1)
+                                .show(ui, |ui| {
+                                    for index in order {
+                                        let port = &self.ports[index];
+                                        let label = format!(
+                                            "{}  {}",
+                                            port.index.map_or_else(
+                                                || "?".to_owned(),
+                                                |value| value.to_string()
+                                            ),
+                                            port.name.as_deref().unwrap_or(&port.id),
+                                        );
+                                        if ui
+                                            .selectable_label(
+                                                self.selected_port == Some(index),
+                                                label,
+                                            )
+                                            .clicked()
+                                        {
+                                            self.selected_port = Some(index);
+                                            let selected_port = port.clone();
+                                            self.start_video(&selected_port);
+                                            // Drop focus so Space/Enter go to the KVM
+                                            // target instead of re-activating this label.
+                                            if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
+                                                ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
+                                            }
                                         }
+                                        ui.end_row();
                                     }
-                                    ui.end_row();
-                                }
-                            });
-                    });
+                                });
+                        });
                 });
         }
 

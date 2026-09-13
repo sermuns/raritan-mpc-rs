@@ -102,7 +102,8 @@ mod tests {
     /// client byte matches the Java client.
     #[test]
     fn handshake_matches_java_client_bytes() {
-        use raritan_common::SessionCreds;        let mut server = Vec::new();
+        use raritan_common::SessionCreds;
+        let mut server = Vec::new();
         server.extend_from_slice(b"e-RIC RFB 01.29\n");
         server.extend_from_slice(&[32, 0x13]); // auth caps: 1|2|16
         server.extend_from_slice(&[33, 0]); // empty session challenge

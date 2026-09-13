@@ -46,7 +46,11 @@ impl RdmClient {
         tls_connector()?.connect(host, stream).map_err(Into::into)
     }
 
-    fn tls_channel(host: &str, protocol: &str, session: Option<&str>) -> eyre::Result<(SslStream<TcpStream>, Vec<u8>)> {
+    fn tls_channel(
+        host: &str,
+        protocol: &str,
+        session: Option<&str>,
+    ) -> eyre::Result<(SslStream<TcpStream>, Vec<u8>)> {
         let mut plain = Self::tcp_connect(host)?;
         let info = csc_start_session(&mut plain, protocol, session)?;
         let tls = Self::tls_upgrade(host, plain)?;
@@ -144,7 +148,9 @@ impl RdmClient {
 
         let mut ports = ports;
         for device_id in connections {
-            ports.extend(parse_ports(&self.database_query(&select_device(&device_id))?)?);
+            ports.extend(parse_ports(
+                &self.database_query(&select_device(&device_id))?,
+            )?);
         }
 
         let ports: Vec<_> = ports
@@ -191,10 +197,7 @@ impl RdmClient {
         // always-on event loop). Callers that retry `establish_video`
         // should be aware each attempt opens one more session.
         std::thread::spawn(move || {
-            if let Err(error) = tls
-                .get_ref()
-                .set_read_timeout(Some(EVENT_DRAIN_TIMEOUT))
-            {
+            if let Err(error) = tls.get_ref().set_read_timeout(Some(EVENT_DRAIN_TIMEOUT)) {
                 info!(error = %format!("{error:#}"), "RDM event drain: cannot set read timeout; exiting");
                 return;
             }

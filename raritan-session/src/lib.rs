@@ -30,7 +30,8 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
     }
     // Exact matches first (deterministic, no ambiguity).
     if let Some(port) = ports.iter().find(|port| {
-        port.index.is_some_and(|index| index.to_string() == selector)
+        port.index
+            .is_some_and(|index| index.to_string() == selector)
             || port.id == selector
             || port.name.as_deref() == Some(selector)
     }) {
@@ -66,9 +67,15 @@ pub fn establish_video(
     let started = std::time::Instant::now();
     // Only credentials are needed here, not the inventory.
     let mut rdm = RdmClient::connect(&config.host, &config.user, &config.password)?;
-    info!(elapsed_ms = started.elapsed().as_millis(), "RDM connect done");
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "RDM connect done"
+    );
     rdm.fetch_session_credentials()?;
-    info!(elapsed_ms = started.elapsed().as_millis(), "RDM credentials done");
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "RDM credentials done"
+    );
     let (session_id, session_key) = rdm
         .session_credentials()
         .map(|(id, key)| (id.to_owned(), key.to_owned()))?;
@@ -78,17 +85,26 @@ pub fn establish_video(
     // session then overlaps the switch's first-frame production.
     info!(%port_id, "connecting RFB session");
     let mut rfb = RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)?;
-    info!(elapsed_ms = started.elapsed().as_millis(), "RFB handshake done");
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "RFB handshake done"
+    );
     if let Err(error) = rdm.open_event_session(&session_id, &session_key) {
         warn!(%error, "RDM event session failed; continuing without it");
     }
-    info!(elapsed_ms = started.elapsed().as_millis(), "RDM event session done");
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "RDM event session done"
+    );
     // Clear any key state stuck down from an earlier session (e.g. a
     // modifier held while the app lost focus or died): the switch keeps
     // per-target key state across connections, so only the target can
     // release it. Releases are no-ops for keys that aren't down.
     rfb.release_all_keys()?;
-    info!(elapsed_ms = started.elapsed().as_millis(), "cleared stuck keys");
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "cleared stuck keys"
+    );
     Ok(rfb)
 }
 
