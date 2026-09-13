@@ -753,17 +753,6 @@ impl eframe::App for MpcApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Version stamp, bottom-right. Declared before the other panels
-        // so it spans the full window width.
-        egui::Panel::bottom("version").show(ui, |ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.small(format!(
-                    "v{} · {}",
-                    env!("CARGO_PKG_VERSION"),
-                    short_sha()
-                ));
-            });
-        });
         if let Some(receiver) = &self.frames {
             // Drain the backlog but upload only the freshest frame: when
             // the network outruns the UI, intermediate frames would each
@@ -990,6 +979,10 @@ impl eframe::App for MpcApp {
                                 }
                             });
                     });
+                    // Version stamp pinned to the sidebar bottom (the
+                    // scroll area above takes all free space).
+                    ui.separator();
+                    ui.small(format!("v{} · {}", env!("CARGO_PKG_VERSION"), short_sha()));
                 });
         }
 
