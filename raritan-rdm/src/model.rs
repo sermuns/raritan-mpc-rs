@@ -62,6 +62,44 @@ impl PortDocument {
     }
 }
 
+/// Switch identity from the pre-TLS `<CSC_Info>` payload: device
+/// attributes plus the named child elements (`Name`, `Hostname`,
+/// `IPAddress`). All optional — firmware varies, and a missing field
+/// must never break the connection.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub struct SwitchInfo {
+    #[serde(rename = "@Type", default)]
+    pub device_type: Option<String>,
+    #[serde(rename = "@id", default)]
+    pub device_id: Option<String>,
+    #[serde(rename = "@Model", default)]
+    pub model: Option<String>,
+    #[serde(rename = "@Version", default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(rename = "IPAddress", default)]
+    pub ip_address: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct CscInfo {
+    #[serde(default)]
+    device: Option<SwitchInfo>,
+}
+
+/// Parses `<CSC_Info>` into [`SwitchInfo`]; unparseable payloads yield
+/// an empty struct instead of an error.
+pub(crate) fn parse_switch_info(xml: &str) -> SwitchInfo {
+    from_str::<CscInfo>(xml)
+        .map(|info| info.device.unwrap_or_default())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct SessionResponse {
     #[serde(rename = "GetSessionID")]
@@ -92,5 +130,23 @@ mod tests {
         .unwrap();
         assert_eq!(ports[0].name.as_deref(), Some("Rack & 1"));
         assert_eq!(ports[0].connection.as_deref(), Some("D_1"));
+    }
+
+    #[test]
+    fn parses_csc_info_device() {
+        let info = parse_switch_info(
+            r#"<CSC_Info><Device Type="Dominion_KX2" id="DKX2_1" Model="DKX2-464" Version="2.7.0.5.2183" ProductCode="HKF"><Name>raritan01</Name><Hostname></Hostname><IPAddress>192.168.42.10</IPAddress></Device></CSC_Info>"#,
+        );
+        assert_eq!(info.device_type.as_deref(), Some("Dominion_KX2"));
+        assert_eq!(info.model.as_deref(), Some("DKX2-464"));
+        assert_eq!(info.version.as_deref(), Some("2.7.0.5.2183"));
+        assert_eq!(info.name.as_deref(), Some("raritan01"));
+        assert_eq!(info.ip_address.as_deref(), Some("192.168.42.10"));
+    }
+
+    #[test]
+    fn garbage_csc_info_yields_empty() {
+        assert_eq!(parse_switch_info(""), SwitchInfo::default());
+        assert_eq!(parse_switch_info("<CSC_Info/>"), SwitchInfo::default());
     }
 }

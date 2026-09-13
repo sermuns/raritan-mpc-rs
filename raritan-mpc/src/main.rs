@@ -1,5 +1,5 @@
 use eframe::egui;
-use raritan_rdm::{Port, RdmClient};
+use raritan_rdm::{Port, RdmClient, SwitchInfo};
 use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
 use raritan_session::{ConnectionConfig, establish_video};
 use std::{
@@ -63,7 +63,10 @@ struct MpcApp {
     sort_order: SortOrder,
     /// Pending port-list refresh result. `Some` while the background
     /// enumeration runs; the button is inert until it completes.
-    port_refresh: Option<Receiver<Result<Vec<Port>, String>>>,
+    port_refresh: Option<Receiver<RefreshResult>>,
+    /// Identity of the connected switch, from its `<CSC_Info>` payload.
+    /// `None` until the first successful enumeration.
+    switch_info: Option<SwitchInfo>,
     /// Whether the Ctrl+Alt+Delete confirmation dialog is open.
     confirm_cad: bool,
     /// Displayed image rect from the last frame, for mapping pointer
@@ -93,6 +96,10 @@ impl SortOrder {
         }
     }
 }
+
+/// Background enumeration result: the active ports plus the switch
+/// identity from its `<CSC_Info>` payload.
+type RefreshResult = Result<(Vec<Port>, SwitchInfo), String>;
 
 enum FrameMessage {
     Frame {
@@ -127,17 +134,18 @@ impl MpcApp {
             show_sidebar: true,
             sort_order: SortOrder::default(),
             port_refresh: None,
+            switch_info: None,
             confirm_cad: false,
             viewport: None,
             mouse_buttons: 0,
             last_pointer: None,
-                wheel_remainder: 0.0,
-            };
-            // Enumerate in the background so a slow/offline switch can't
-            // freeze window creation.
-            app.refresh_ports();
-            app
-        }
+            wheel_remainder: 0.0,
+        };
+        // Enumerate in the background so a slow/offline switch can't
+        // freeze window creation.
+        app.refresh_ports();
+        app
+    }
 
     /// Clears per-session video state (texture, size cache, pointer).
     /// Used both when starting video and on disconnect.
@@ -257,21 +265,23 @@ impl MpcApp {
     fn reconnect(&mut self) {
         self.disconnect_video();
         self.ports.clear();
+        self.switch_info = None;
         self.refresh_ports();
     }
 
     /// Applies a finished refresh: swaps in the new list, keeps the
     /// selected port if it still exists, and reports errors.
-    fn apply_refresh(&mut self, result: Result<Vec<Port>, String>) {
+    fn apply_refresh(&mut self, result: RefreshResult) {
         self.port_refresh = None;
         match result {
-            Ok(ports) => {
+            Ok((ports, switch_info)) => {
                 info!(count = ports.len(), "port list refreshed");
                 let selected_id = self
                     .selected_port
                     .and_then(|index| self.ports.get(index))
                     .map(|port| port.id.clone());
                 self.ports = ports;
+                self.switch_info = Some(switch_info);
                 self.selected_port =
                     selected_id.and_then(|id| self.ports.iter().position(|port| port.id == id));
                 self.connection_status = "Ready".to_owned();
@@ -365,16 +375,22 @@ impl MpcApp {
 
 /// Port enumeration filtered to active ports, shared by startup and
 /// refresh so the connect/filter logic lives in one place.
-fn enumerate_active_ports(host: &str, user: &str, password: &str) -> Result<Vec<Port>, String> {
-    RdmClient::connect(host, user, password)
-        .and_then(|mut client| client.enumerate_ports())
+fn enumerate_active_ports(
+    host: &str,
+    user: &str,
+    password: &str,
+) -> RefreshResult {
+    let mut client = RdmClient::connect(host, user, password).map_err(|error| format!("{error:?}"))?;
+    let ports = client
+        .enumerate_ports()
         .map(|ports| {
             ports
                 .into_iter()
                 .filter(|port| port.status == Some(1))
                 .collect()
         })
-        .map_err(|error| format!("{error:?}"))
+        .map_err(|error| format!("{error:?}"))?;
+    Ok((ports, client.switch_info().clone()))
 }
 
 /// One video session: RDM login, RFB handshake, then the pump loop
@@ -427,9 +443,7 @@ fn run_video_session(
                                 if !held.contains(&eric) {
                                     held.push(eric);
                                 }
-                            } else if let Some(index) =
-                                held.iter().position(|held| *held == eric)
-                            {
+                            } else if let Some(index) = held.iter().position(|held| *held == eric) {
                                 held.swap_remove(index);
                             }
                         }
@@ -849,7 +863,24 @@ impl eframe::App for MpcApp {
                             self.refresh_ports();
                         }
                     });
+                    // Identity of the connected switch, from its CSC_Info
+                    // payload. Shown once the first enumeration lands.
+                    if let Some(info) = &self.switch_info {
+                        ui.separator();
+                        ui.label(format!(
+                            "{} ({})",
+                            info.name.as_deref().unwrap_or("Switch"),
+                            info.model.as_deref().unwrap_or("unknown model"),
+                        ));
+                        if let Some(version) = &info.version {
+                            ui.small(format!("Firmware {version}"));
+                        }
+                        if let Some(address) = &info.ip_address {
+                            ui.small(address);
+                        }
+                    }
                     ui.separator();
+                    ui.heading("Ports");
                     ui.horizontal(|ui| {
                         ui.label("Sort by:");
                         egui::ComboBox::from_id_salt("port_sort")
@@ -939,16 +970,12 @@ impl eframe::App for MpcApp {
                             // client's Calibrate Color / Auto Sense menu
                             // entries (V01_27 settings table: 18 =
                             // auto-sense, 19 = color calibration).
-                            for (label, setting) in
-                                [("Auto sense", 18), ("Calibrate color", 19)]
-                            {
+                            for (label, setting) in [("Auto sense", 18), ("Calibrate color", 19)] {
                                 if ui.button(label).clicked()
                                     && let Some(tx) = &self.cmd_tx
                                 {
-                                    let _ = tx.send(VideoCommand::VideoSettings {
-                                        setting,
-                                        value: 0,
-                                    });
+                                    let _ =
+                                        tx.send(VideoCommand::VideoSettings { setting, value: 0 });
                                 }
                             }
                         });

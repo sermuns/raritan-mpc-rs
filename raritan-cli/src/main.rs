@@ -58,6 +58,14 @@ fn main() -> color_eyre::Result<()> {
     }
 
     let ports = client.enumerate_ports()?;
+    let switch = client.switch_info();
+    println!(
+        "{} ({}) firmware {} at {}",
+        switch.name.as_deref().unwrap_or("Switch"),
+        switch.model.as_deref().unwrap_or("unknown model"),
+        switch.version.as_deref().unwrap_or("unknown"),
+        switch.ip_address.as_deref().unwrap_or(&args.host),
+    );
     for port in &ports {
         let index = port
             .index

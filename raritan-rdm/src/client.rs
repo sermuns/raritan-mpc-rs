@@ -1,7 +1,7 @@
 use crate::{
     event::csc_test2,
     handshake::{csc_auth, csc_start_session},
-    model::{SessionResponse, parse_ports},
+    model::{SessionResponse, SwitchInfo, parse_ports, parse_switch_info},
     tr::{probe_ping as tr_probe_ping, request_video_grant},
 };
 use eyre::{Context, OptionExt};
@@ -29,6 +29,7 @@ pub struct RdmClient {
     host: String,
     session_id: Option<String>,
     session_key: Option<String>,
+    switch_info: SwitchInfo,
 }
 
 impl RdmClient {
@@ -56,7 +57,8 @@ impl RdmClient {
         let host = host.into();
         info!(%host, "connecting to RDM control channel");
         let (mut tls, info) = Self::tls_channel(&host, "RDM", None)?;
-        debug!(length = info.len(), "received CSC info");
+        let switch_info = parse_switch_info(&String::from_utf8_lossy(&info));
+        debug!(?switch_info, "received CSC info");
         csc_auth(&mut tls, user, password)?;
         info!(%host, "RDM authentication succeeded");
         Ok(Self {
@@ -64,19 +66,27 @@ impl RdmClient {
             host,
             session_id: None,
             session_key: None,
+            switch_info,
         })
     }
 
     /// Opens the CSC+TLS channel without authenticating (diagnostic aid).
     pub fn connect_unauthed(host: impl Into<String>) -> eyre::Result<Self> {
         let host = host.into();
-        let (tls, _) = Self::tls_channel(&host, "RDM", None)?;
+        let (tls, info) = Self::tls_channel(&host, "RDM", None)?;
+        let switch_info = parse_switch_info(&String::from_utf8_lossy(&info));
         Ok(Self {
             stream: tls,
             host,
             session_id: None,
             session_key: None,
+            switch_info,
         })
+    }
+
+    /// Identity of the connected switch, from the `<CSC_Info>` payload.
+    pub fn switch_info(&self) -> &SwitchInfo {
+        &self.switch_info
     }
 
     pub fn database_query(&mut self, request: &str) -> eyre::Result<String> {
