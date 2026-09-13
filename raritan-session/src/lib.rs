@@ -8,7 +8,7 @@ use eyre::OptionExt;
 use raritan_rdm::{Port, RdmClient};
 use raritan_rfb::{Framebuffer, PixelFormat, RfbStream};
 use std::net::TcpStream;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Login triple for both the listing and the video RDM sessions.
 #[derive(Debug, Clone)]
@@ -153,7 +153,7 @@ fn capture_frames_inner(
         }
         total_rects += update.rectangles.len();
         framebuffer.apply_update(&update, PixelFormat::RGB565)?;
-        info!(
+        debug!(
             update = updates,
             flags = update.flags,
             rects = update.rectangles.len(),

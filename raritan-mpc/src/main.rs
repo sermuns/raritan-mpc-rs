@@ -7,7 +7,7 @@ use std::{
     thread,
     time::Duration,
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 const HOST: &str = "192.168.42.10";
@@ -430,7 +430,7 @@ fn run_video_session(
                 info!(width, height, "framebuffer resized; recreating buffer");
                 framebuffer = Framebuffer::try_new(width, height)?;
             }
-            info!(
+            debug!(
                 rectangles = update.rectangles.len(),
                 flags = update.flags,
                 "decoded framebuffer update"
