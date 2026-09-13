@@ -135,13 +135,13 @@ mod tests {
     #[test]
     fn parses_csc_info_device() {
         let info = parse_switch_info(
-            r#"<CSC_Info><Device Type="Dominion_KX2" id="DKX2_1" Model="DKX2-464" Version="2.7.0.5.2183" ProductCode="HKF"><Name>raritan01</Name><Hostname></Hostname><IPAddress>192.168.42.10</IPAddress></Device></CSC_Info>"#,
+            r#"<CSC_Info><Device Type="Dominion_KX2" id="DKX2_1" Model="DKX2-464" Version="2.7.0.5.2183" ProductCode="HKF"><Name>raritan01</Name><Hostname></Hostname><IPAddress>192.0.2.10</IPAddress></Device></CSC_Info>"#,
         );
         assert_eq!(info.device_type.as_deref(), Some("Dominion_KX2"));
         assert_eq!(info.model.as_deref(), Some("DKX2-464"));
         assert_eq!(info.version.as_deref(), Some("2.7.0.5.2183"));
         assert_eq!(info.name.as_deref(), Some("raritan01"));
-        assert_eq!(info.ip_address.as_deref(), Some("192.168.42.10"));
+        assert_eq!(info.ip_address.as_deref(), Some("192.0.2.10"));
     }
 
     #[test]

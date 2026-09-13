@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Initial switch address (editable in the UI, persisted afterwards).
-const DEFAULT_HOST: &str = "192.168.42.10";
+const DEFAULT_HOST: &str = "";
 /// Factory login; the user/password fields stay disabled unless the
 /// "custom credentials" checkbox is ticked.
 const DEFAULT_USER: &str = "admin";
@@ -28,7 +28,7 @@ const MAX_VIDEO_ATTEMPTS: u32 = 4;
 #[derive(Parser)]
 #[command(version, about = "Raritan MPC graphical KVM client")]
 struct Args {
-    /// Switch address (e.g. 192.168.42.10).
+    /// Switch address.
     #[arg(long)]
     host: Option<String>,
     /// Login username.

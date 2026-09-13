@@ -30,7 +30,7 @@ raritan-cli HOST --ping-pre-auth
 ## Capturing traffic
 
 ```bash
-dumpcap -i skuldafn -f "host 192.168.42.10" -w /tmp/opencode/ours.pcapng
+dumpcap -i skuldafn -f "host <switch-host>" -w /tmp/opencode/ours.pcapng
 SSLKEYLOGFILE=/tmp/opencode/ourskeys.log raritan-cli ...
 ```
 

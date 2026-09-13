@@ -27,10 +27,10 @@ A Rust rewrite of the Raritan MPC Java client for Raritan KVM switches
 
 ```bash
 # List KVM ports
-cargo run -p raritan-cli -- 192.168.42.10
+cargo run -p raritan-cli -- <HOST>
 
 # Capture 60 framebuffer updates from a port, write /tmp/opencode/frame.ppm
-cargo run -p raritan-cli -- 192.168.42.10 --video "Rack 10" --frames 60
+cargo run -p raritan-cli -- <HOST> --video "Rack 10" --frames 60
 
 # GUI
 cargo run -p raritan-mpc
