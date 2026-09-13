@@ -1,6 +1,12 @@
+<div align=center>
+
 # `raritan-mpc-rs`
 
-A feature-incomplete vibecoded rewrite of "Raritan Multi-Platform Client".
+</div>
+
+A feature-incomplete **vibecoded** rewrite of "Raritan Multi-Platform Client".
+
+![demo](docs/demo.jpg)
 
 ## How much of this is LLM-generated?
 
@@ -10,13 +16,15 @@ The commits with message starting with `(slop)` contain LLM output.
 
 The Rust code and the documentation is probably 99% LLM output.
 
+If you hate LLMs and/or don't trust the code, that's very understandable.
+
 ## Why did you do this?
 
 The official Raritan MPC written in Java requires Java 8, and hacking around so that Java accepts using TLSv1. Take a look at this community-made Nix flake to get a feel: <https://gitlab.com/B4dM4n/raritan-mpc>.
 
 I just want a static binary that works.
 
-I also was morbidly curious how little of the source code a vibecoder needs to understand (spoiler- nothing).
+I also was morbidly curious how little of the source code a vibecoder needs to understand (_spoiler- nothing_).
 
 ## How did you do this?
 
