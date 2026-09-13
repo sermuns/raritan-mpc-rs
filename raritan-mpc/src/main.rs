@@ -671,6 +671,20 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
     })
 }
 
+/// Sidebar collapse/expand toggle: the arrow points where the sidebar
+/// goes — ◀ collapses it away, ▶ brings it back.
+fn sidebar_toggle_label(expanded: bool) -> &'static str {
+    if expanded { "◀ Ports" } else { "Ports ▶" }
+}
+
+fn sidebar_toggle_hover(expanded: bool) -> &'static str {
+    if expanded {
+        "Collapse the port sidebar"
+    } else {
+        "Expand the port sidebar"
+    }
+}
+
 impl eframe::App for MpcApp {
     /// Persists the connection values via eframe's official storage
     /// (ron file under the OS data dir, written on exit). Note the
@@ -902,8 +916,9 @@ impl eframe::App for MpcApp {
                     .unwrap_or_else(|| "Selected port".to_owned());
                 let port_id = self.ports[index].id.clone();
                 ui.horizontal(|ui| {
-                    ui.toggle_value(&mut self.show_sidebar, "Ports")
-                        .on_hover_text("Show/hide the port sidebar");
+                    let expanded = self.show_sidebar;
+                    ui.toggle_value(&mut self.show_sidebar, sidebar_toggle_label(expanded))
+                        .on_hover_text(sidebar_toggle_hover(expanded));
                     ui.heading(&port_name);
                     ui.label(format!("Port ID: {port_id}"));
                     if self.cmd_tx.is_some() {
@@ -990,8 +1005,9 @@ impl eframe::App for MpcApp {
                 }
             } else {
                 ui.horizontal(|ui| {
-                    ui.toggle_value(&mut self.show_sidebar, "Ports")
-                        .on_hover_text("Show/hide the port sidebar");
+                    let expanded = self.show_sidebar;
+                    ui.toggle_value(&mut self.show_sidebar, sidebar_toggle_label(expanded))
+                        .on_hover_text(sidebar_toggle_hover(expanded));
                     if let Some(error) = &self.error {
                         ui.colored_label(egui::Color32::RED, error);
                     }
