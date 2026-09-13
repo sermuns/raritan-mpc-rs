@@ -269,6 +269,15 @@ impl MpcApp {
         self.refresh_ports();
     }
 
+    /// Drops everything switch-related (video session, port list,
+    /// switch identity); back to the pre-connect state.
+    fn disconnect_switch(&mut self) {
+        self.disconnect_video();
+        self.ports.clear();
+        self.switch_info = None;
+        self.connection_status = "Disconnected".to_owned();
+    }
+
     /// Applies a finished refresh: swaps in the new list, keeps the
     /// selected port if it still exists, and reports errors.
     fn apply_refresh(&mut self, result: RefreshResult) {
@@ -865,7 +874,8 @@ impl eframe::App for MpcApp {
                     });
                     // Identity of the connected switch, from its CSC_Info
                     // payload. Shown once the first enumeration lands.
-                    if let Some(info) = &self.switch_info {
+                    // Cloned: the disconnect button below mutates `self`.
+                    if let Some(info) = self.switch_info.clone() {
                         ui.separator();
                         ui.label(format!(
                             "{} ({})",
@@ -877,6 +887,13 @@ impl eframe::App for MpcApp {
                         }
                         if let Some(address) = &info.ip_address {
                             ui.small(address);
+                        }
+                        if ui
+                            .button("Disconnect switch")
+                            .on_hover_text("Drop the video session and forget this switch")
+                            .clicked()
+                        {
+                            self.disconnect_switch();
                         }
                     }
                     ui.separator();
