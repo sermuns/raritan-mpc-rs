@@ -947,7 +947,12 @@ impl eframe::App for MpcApp {
                         ui.spinner();
                     }
                     let order = self.port_order();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        // Take all free space (don't shrink to content) so
+                        // the version stamp below stays pinned to the
+                        // sidebar bottom.
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
                         egui::Grid::new("port_list")
                             .striped(true)
                             .num_columns(1)
