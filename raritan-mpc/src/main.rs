@@ -79,6 +79,11 @@ struct MpcApp {
     last_pointer: Option<(u8, u16, u16)>,
     /// Fractional wheel lines awaiting a whole notch.
     wheel_remainder: f32,
+    /// Manual video action awaiting resumed frames ("Calibrating color…"
+    /// / "Auto-sensing video…"). Set when the action is sent, cleared by
+    /// the next decoded frame — the switch pauses the stream while it
+    /// works, and otherwise the frozen picture looks like a hang.
+    pending_video_action: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -140,6 +145,7 @@ impl MpcApp {
             mouse_buttons: 0,
             last_pointer: None,
             wheel_remainder: 0.0,
+            pending_video_action: None,
         };
         // Enumerate in the background so a slow/offline switch can't
         // freeze window creation.
@@ -156,6 +162,7 @@ impl MpcApp {
         self.mouse_buttons = 0;
         self.last_pointer = None;
         self.wheel_remainder = 0.0;
+        self.pending_video_action = None;
     }
 
     /// Drops the video session and its UI state, shared by the
@@ -756,6 +763,9 @@ impl eframe::App for MpcApp {
                 }
             }
             if let Some((width, height, rgba)) = latest_frame {
+                // Frames flowing again clears any "waiting for video"
+                // notice set by Calibrate/Auto sense.
+                self.pending_video_action = None;
                 // A late resolution change resizes the stream: drop the
                 // old texture so it is recreated at the new dimensions
                 // instead of stretching the new pixels into it.
@@ -988,12 +998,18 @@ impl eframe::App for MpcApp {
                             // client's Calibrate Color / Auto Sense menu
                             // entries (V01_27 settings table: 18 =
                             // auto-sense, 19 = color calibration).
-                            for (label, setting) in [("Auto sense", 18), ("Calibrate color", 19)] {
+                            for (label, setting, waiting) in [
+                                ("Auto sense", 18, "Auto-sensing video…"),
+                                ("Calibrate color", 19, "Calibrating color…"),
+                            ] {
                                 if ui.button(label).clicked()
                                     && let Some(tx) = &self.cmd_tx
                                 {
                                     let _ =
                                         tx.send(VideoCommand::VideoSettings { setting, value: 0 });
+                                    // The switch pauses frames while it works;
+                                    // say so until the stream resumes.
+                                    self.pending_video_action = Some(waiting.to_owned());
                                 }
                             }
                         });
@@ -1001,6 +1017,14 @@ impl eframe::App for MpcApp {
                 });
                 if let Some(error) = &self.error {
                     ui.colored_label(egui::Color32::RED, error);
+                }
+                // Manual video actions pause the frame stream while the
+                // switch works; reassure instead of showing a dead picture.
+                if let Some(notice) = &self.pending_video_action {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("{notice} Waiting for video to resume…"));
+                    });
                 }
                 ui.separator();
                 // Confirmation dialog for the Secure Attention Sequence,
