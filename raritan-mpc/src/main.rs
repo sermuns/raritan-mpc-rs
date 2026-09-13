@@ -701,6 +701,23 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
     })
 }
 
+/// Short git sha for the version stamp, from vergen-gitcl's
+/// `VERGEN_GIT_SHA` (set by `build.rs`). Falls back to placeholders
+/// when built outside a git checkout, with `*` marking a dirty tree.
+fn short_sha() -> String {
+    match option_env!("VERGEN_GIT_SHA") {
+        Some(sha) => {
+            let short: String = sha.chars().take(7).collect();
+            if option_env!("VERGEN_GIT_DIRTY") == Some("true") {
+                format!("{short}*")
+            } else {
+                short
+            }
+        }
+        None => "unknown".to_owned(),
+    }
+}
+
 /// Sidebar collapse/expand toggle: the arrow points where the sidebar
 /// goes — ◀ collapses it away, ▶ brings it back. Labeled "Sidebar"
 /// (not "Ports") since it holds the switch connection, not just ports.
@@ -736,6 +753,17 @@ impl eframe::App for MpcApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Version stamp, bottom-right. Declared before the other panels
+        // so it spans the full window width.
+        egui::Panel::bottom("version").show(ui, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.small(format!(
+                    "v{} · {}",
+                    env!("CARGO_PKG_VERSION"),
+                    short_sha()
+                ));
+            });
+        });
         if let Some(receiver) = &self.frames {
             // Drain the backlog but upload only the freshest frame: when
             // the network outruns the UI, intermediate frames would each
