@@ -1,4 +1,5 @@
 <div align=center>
+<img src="media/logo.svg" width="200">
 
 # `raritan-mpc-rs`
 
@@ -12,7 +13,7 @@ A feature-incomplete **vibecoded** rewrite of "Raritan Multi-Platform Client".
 
 The commits with message starting with `(slop)` contain LLM output.
 
-**This README is the only thing in this project that is 100% human-written.**
+**This README and the logo are the only two things in this project that are 100% created by a human.**
 
 The Rust code and the documentation is probably 99% LLM output.
 
