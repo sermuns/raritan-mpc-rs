@@ -59,7 +59,7 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ matrix.build.TARGET }}
+          shared-key: ${{ runner.os }}
 
       - name: Build raritan-mpc
         run: cargo build --release --locked -p raritan-mpc --target ${{ matrix.build.TARGET }} --features vendored-openssl
