@@ -7,7 +7,7 @@
 
 A feature-incomplete **vibecoded** rewrite of "Raritan Multi-Platform Client".
 
-![demo](docs/demo.jpg)
+![demo](docs/demo.png)
 
 ## How much of this is LLM-generated?
 
