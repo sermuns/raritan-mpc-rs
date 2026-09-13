@@ -1,0 +1,8 @@
+consolidate-commits = true
+pre-release-commit-message = "release v{{version}}"
+tag-message = "release v{{version}}"
+tag-name = "v{{version}}"
+
+publish = false
+push = false
+tag = true
