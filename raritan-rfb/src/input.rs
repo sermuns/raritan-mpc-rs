@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(bytes.len(), 138 * 4);
         assert_eq!(&bytes[0..4], &[4, 0, 0, 0]);
         assert_eq!(&bytes[bytes.len() - 4..], &[4, 0, 0, 137]);
-        for chunk in bytes.chunks_exact(4) {
+        for chunk in bytes.as_chunks::<4>().0 {
             assert_eq!(chunk[0], 4);
             assert_eq!(chunk[1], 0);
             assert!(chunk[2] & 0x80 == 0);
