@@ -10,3 +10,6 @@ eyre.workspace = true
 tracing.workspace = true
 raritan-rdm.workspace = true
 raritan-rfb.workspace = true
+
+[lints]
+workspace = true

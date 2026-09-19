@@ -27,3 +27,6 @@ raritan-common = { path = "raritan-common" }
 raritan-rdm = { path = "raritan-rdm" }
 raritan-rfb = { path = "raritan-rfb" }
 raritan-session = { path = "raritan-session" }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
