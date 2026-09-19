@@ -6,7 +6,7 @@ use raritan_session::{ConnectionConfig, establish_video};
 use std::{
     sync::mpsc::{self, Receiver, Sender},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -17,8 +17,66 @@ const DEFAULT_HOST: &str = "";
 const DEFAULT_USER: &str = "admin";
 const DEFAULT_PASSWORD: &str = "admin";
 
+/// Persisted UI preferences, stored as one RON blob under [`eframe::APP_KEY`].
+/// Missing fields fall back to [`PersistedState::default`], so old blobs
+/// stay loadable when fields are added.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct PersistedState {
+    host: String,
+    user: String,
+    password: String,
+    custom_credentials: bool,
+    auto_refresh: bool,
+}
+
+impl Default for PersistedState {
+    fn default() -> Self {
+        Self {
+            host: DEFAULT_HOST.to_owned(),
+            user: DEFAULT_USER.to_owned(),
+            password: DEFAULT_PASSWORD.to_owned(),
+            custom_credentials: false,
+            auto_refresh: true,
+        }
+    }
+}
+
+/// Loads the persisted preferences: the RON blob first, then the legacy
+/// individual string keys (pre-blob installs), then defaults.
+fn load_persisted(storage: Option<&dyn eframe::Storage>) -> PersistedState {
+    let Some(storage) = storage else {
+        return PersistedState::default();
+    };
+    if let Some(state) = eframe::get_value(storage, eframe::APP_KEY) {
+        return state;
+    }
+    let mut state = PersistedState::default();
+    if let Some(host) = storage.get_string("host") {
+        state.host = host;
+    }
+    if let Some(user) = storage.get_string("username") {
+        state.user = user;
+    }
+    if let Some(password) = storage.get_string("password") {
+        state.password = password;
+    }
+    state.custom_credentials = storage
+        .get_string("custom_credentials")
+        .is_some_and(|value| value == "1");
+    state.auto_refresh = storage
+        .get_string("auto_refresh")
+        .is_none_or(|value| value == "1");
+    state
+}
+
 /// Video session attempts per port selection (initial try + backoff retries).
 const MAX_VIDEO_ATTEMPTS: u32 = 4;
+
+/// Port-list auto-refresh interval. The Java client refreshes only on
+/// demand; polling keeps busy markers fresh at negligible load (one login
+/// plus a few small queries per cycle — far less than a held session).
+const PORT_AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Command-line overrides for this run: `--help`/`--version` exit early;
 /// the flags win without overwriting the persisted sidebar values.
@@ -71,6 +129,9 @@ fn main() -> eframe::Result {
     )
 }
 
+// Flat egui state: grouping the flags into sub-structs would add
+// indirection at every use site for no gain.
+#[allow(clippy::struct_excessive_bools)]
 struct MpcApp {
     /// Switch address (sidebar-editable, persisted).
     host: String,
@@ -91,6 +152,10 @@ struct MpcApp {
     sort_order: SortOrder,
     /// In-flight port-list refresh; the buttons wait on it.
     port_refresh: Option<Receiver<RefreshResult>>,
+    /// When the last refresh launched (manual or automatic); drives auto-refresh.
+    last_refresh: Instant,
+    /// Whether the port list re-enumerates by itself (persisted).
+    auto_refresh: bool,
     /// Switch identity from `<CSC_Info>`; `None` until first enumeration.
     switch_info: Option<SwitchInfo>,
     confirm_cad: bool,
@@ -143,29 +208,23 @@ impl MpcApp {
         user_override: Option<String>,
         password_override: Option<String>,
     ) -> Self {
-        // Restore last-used values via eframe persistence; CLI flags win
-        // for this run without overwriting stored values.
-        let storage = creation_context.storage;
-        let get = |key: &str| storage.and_then(|storage| storage.get_string(key));
-        let mut custom_credentials = get("custom_credentials").is_some_and(|value| value == "1");
-        let mut user = get("username").unwrap_or_else(|| DEFAULT_USER.to_owned());
-        let mut password = get("password").unwrap_or_else(|| DEFAULT_PASSWORD.to_owned());
+        // Restored preferences; CLI flags win for this run without
+        // overwriting what is stored.
+        let mut persisted = load_persisted(creation_context.storage);
         if user_override.is_some() || password_override.is_some() {
             if let Some(user_flag) = user_override {
-                user = user_flag;
+                persisted.user = user_flag;
             }
             if let Some(password_flag) = password_override {
-                password = password_flag;
+                persisted.password = password_flag;
             }
-            custom_credentials = true;
+            persisted.custom_credentials = true;
         }
         let mut app = Self {
-            host: host_override
-                .or_else(|| get("host"))
-                .unwrap_or_else(|| DEFAULT_HOST.to_owned()),
-            user,
-            password,
-            custom_credentials,
+            host: host_override.unwrap_or(persisted.host),
+            user: persisted.user,
+            password: persisted.password,
+            custom_credentials: persisted.custom_credentials,
             ports: Vec::new(),
             selected_port: None,
             error: None,
@@ -177,6 +236,8 @@ impl MpcApp {
             show_sidebar: true,
             sort_order: SortOrder::default(),
             port_refresh: None,
+            last_refresh: Instant::now(),
+            auto_refresh: persisted.auto_refresh,
             switch_info: None,
             confirm_cad: false,
             viewport: None,
@@ -284,6 +345,7 @@ impl MpcApp {
         info!(host = %self.host, "refreshing port list");
         let (sender, receiver) = mpsc::channel();
         self.port_refresh = Some(receiver);
+        self.last_refresh = Instant::now();
         "Refreshing ports".clone_into(&mut self.connection_status);
         self.error = None;
         let host = self.host.clone();
@@ -408,18 +470,13 @@ impl MpcApp {
     }
 }
 
-/// Port enumeration filtered to active ports.
+/// Port enumeration filtered to available + busy ports (status 1/2).
 fn enumerate_active_ports(host: &str, user: &str, password: &str) -> RefreshResult {
     let mut client =
         RdmClient::connect(host, user, password).map_err(|error| format!("{error:?}"))?;
     let ports = client
         .enumerate_ports()
-        .map(|ports| {
-            ports
-                .into_iter()
-                .filter(|port| port.status == Some(1))
-                .collect()
-        })
+        .map(|ports| ports.into_iter().filter(Port::is_listed).collect())
         .map_err(|error| format!("{error:?}"))?;
     Ok((ports, client.switch_info().clone()))
 }
@@ -760,18 +817,18 @@ fn sidebar_toggle_hover(expanded: bool) -> &'static str {
 }
 
 impl eframe::App for MpcApp {
-    /// Persists connection values via eframe storage (written on exit).
+    /// Persists the connection values as one RON blob (written on exit).
     /// Note: the password is stored in plaintext, like the CLI flags.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string("host", self.host.clone());
-        storage.set_string("username", self.user.clone());
-        storage.set_string("password", self.password.clone());
-        storage.set_string(
-            "custom_credentials",
-            if self.custom_credentials {
-                "1".to_owned()
-            } else {
-                String::new()
+        eframe::set_value(
+            storage,
+            eframe::APP_KEY,
+            &PersistedState {
+                host: self.host.clone(),
+                user: self.user.clone(),
+                password: self.password.clone(),
+                custom_credentials: self.custom_credentials,
+                auto_refresh: self.auto_refresh,
             },
         );
     }
@@ -827,6 +884,18 @@ impl eframe::App for MpcApp {
         }
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
+
+        // Auto-refresh the port list so busy markers stay fresh. Only while
+        // connected (`switch_info` is cleared by Disconnect and absent until
+        // the first success, so this never fights those states or spams
+        // errors for an empty host); in-flight refreshes stay inert.
+        if self.auto_refresh
+            && self.switch_info.is_some()
+            && !self.host.trim().is_empty()
+            && self.last_refresh.elapsed() >= PORT_AUTO_REFRESH_INTERVAL
+        {
+            self.refresh_ports();
+        }
 
         // Forward key presses to the target while a session runs (text events
         // ignored: the press/release pair suffices; pointer events share the channel).
@@ -920,6 +989,8 @@ impl eframe::App for MpcApp {
                             self.refresh_ports();
                         }
                     });
+                    ui.checkbox(&mut self.auto_refresh, "Auto-refresh ports")
+                        .on_hover_text("Re-enumerate ports every 30 seconds");
                     // Connected switch identity (CSC_Info); cloned since Disconnect mutates `self`.
                     if let Some(info) = self.switch_info.clone() {
                         ui.separator();
@@ -995,6 +1066,14 @@ impl eframe::App for MpcApp {
                                         );
                                         let selected = self.selected_port == Some(index);
                                         let selected_port = port.clone();
+                                        let busy = port.is_busy();
+                                        // Busy ports stay clickable; the suffix +
+                                        // tooltip show they are in use elsewhere.
+                                        let label = if busy {
+                                            format!("{label} (busy)")
+                                        } else {
+                                            label
+                                        };
                                         let stripe = if row % 2 == 1 {
                                             ui.visuals().faint_bg_color
                                         } else {
@@ -1004,10 +1083,14 @@ impl eframe::App for MpcApp {
                                             ui.with_layout(
                                                 egui::Layout::top_down_justified(egui::Align::LEFT),
                                                 |ui| {
-                                                    if ui
-                                                        .selectable_label(selected, label)
-                                                        .clicked()
-                                                    {
+                                                    let mut response =
+                                                        ui.selectable_label(selected, label);
+                                                    if busy {
+                                                        response = response.on_hover_text(
+                                                            "Busy — in use by another user",
+                                                        );
+                                                    }
+                                                    if response.clicked() {
                                                         self.selected_port = Some(index);
                                                         self.start_video(&selected_port);
                                                         // Drop focus so Space/Enter go to the KVM
@@ -1163,11 +1246,63 @@ impl eframe::App for MpcApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::Storage;
 
     #[test]
     fn embedded_icon_decodes_to_rgba() {
         let icon = load_app_icon().expect("media/icon-128.png must decode");
         assert_eq!((icon.width, icon.height), (128, 128));
         assert_eq!(icon.rgba.len(), 128 * 128 * 4);
+    }
+
+    #[derive(Default)]
+    struct MemStorage {
+        strings: std::collections::HashMap<String, String>,
+    }
+
+    impl eframe::Storage for MemStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.strings.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.strings.insert(key.to_owned(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.strings.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn persisted_state_roundtrips_through_storage() {
+        let mut storage = MemStorage::default();
+        eframe::set_value(
+            &mut storage,
+            eframe::APP_KEY,
+            &PersistedState {
+                host: "switch".to_owned(),
+                user: "admin".to_owned(),
+                password: "secret".to_owned(),
+                custom_credentials: true,
+                auto_refresh: false,
+            },
+        );
+        let loaded: PersistedState =
+            eframe::get_value(&storage, eframe::APP_KEY).expect("blob must decode");
+        assert_eq!(loaded.host, "switch");
+        assert_eq!(loaded.password, "secret");
+        assert!(loaded.custom_credentials);
+        assert!(!loaded.auto_refresh);
+    }
+
+    #[test]
+    fn legacy_string_keys_migrate() {
+        let mut storage = MemStorage::default();
+        storage.set_string("host", "old-switch".to_owned());
+        storage.set_string("custom_credentials", "1".to_owned());
+        let loaded = load_persisted(Some(&storage));
+        assert_eq!(loaded.host, "old-switch");
+        assert!(loaded.custom_credentials);
+        assert!(loaded.auto_refresh);
     }
 }

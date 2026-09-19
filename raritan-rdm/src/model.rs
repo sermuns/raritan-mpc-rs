@@ -13,6 +13,8 @@ pub struct Port {
     pub r#type: Option<String>,
     #[serde(rename = "@index", default)]
     pub index: Option<i32>,
+    /// Switch status: 0 = unavailable, 1 = available, 2 = busy
+    /// (the Java client's "Busy" tooltip: in use by someone else).
     #[serde(rename = "@Status", default)]
     pub status: Option<i32>,
     #[serde(rename = "@StatAvailable", default)]
@@ -26,6 +28,19 @@ pub struct Port {
 
 pub(crate) fn parse_ports(xml: &str) -> Result<Vec<Port>> {
     Ok(from_str::<PortDocument>(xml)?.into_ports())
+}
+
+impl Port {
+    /// Ports worth listing: available (1) or busy (2). Unavailable (0)
+    /// and unknown statuses stay hidden, like the Java client.
+    pub fn is_listed(&self) -> bool {
+        matches!(self.status, Some(1 | 2))
+    }
+
+    /// Busy (status 2): connected elsewhere, shown with a marker.
+    pub fn is_busy(&self) -> bool {
+        self.status == Some(2)
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -147,5 +162,23 @@ mod tests {
     fn garbage_csc_info_yields_empty() {
         assert_eq!(parse_switch_info(""), SwitchInfo::default());
         assert_eq!(parse_switch_info("<CSC_Info/>"), SwitchInfo::default());
+    }
+
+    #[test]
+    fn busy_ports_are_listed_and_flagged() {
+        let ports = parse_ports(
+            r#"<Database><Get><Data><Device id="D_1"><Port id="P_5" Class="KVM" index="5" Status="1"><Name>IDLE-BOX</Name></Port><Port id="P_6" Class="KVM" index="6" Status="2"><Name>LAILA-W14</Name></Port><Port id="P_7" Class="KVM" index="7" Status="0"><Name>OFFLINE-BOX</Name></Port></Device></Data></Get></Database>"#,
+        )
+        .unwrap();
+        let listed: Vec<&str> = ports
+            .iter()
+            .filter(|port| port.is_listed())
+            .map(|port| port.id.as_str())
+            .collect();
+        assert_eq!(listed, ["P_5", "P_6"]);
+        let laila = ports.iter().find(|port| port.id == "P_6").unwrap();
+        assert_eq!(laila.index, Some(6));
+        assert!(laila.is_busy());
+        assert!(!ports[0].is_busy());
     }
 }

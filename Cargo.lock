@@ -2181,6 +2181,7 @@ dependencies = [
  "raritan-rdm",
  "raritan-rfb",
  "raritan-session",
+ "serde",
  "tracing",
  "tracing-subscriber",
 ]
