@@ -22,3 +22,7 @@ install:
     update-desktop-database "$HOME/.local/share/applications"
     gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" >/dev/null
     echo "installed: $(command -v raritan-mpc)"
+
+push:
+    git push
+    git push --tags
