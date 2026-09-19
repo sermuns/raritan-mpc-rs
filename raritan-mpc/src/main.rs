@@ -1,10 +1,16 @@
 use clap::Parser;
 use eframe::egui;
-use raritan_rdm::{Port, RdmClient, SwitchInfo};
+use raritan_rdm::{Port, SwitchInfo};
 use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
-use raritan_session::{ConnectionConfig, establish_video};
+use raritan_session::{
+    Cancelled, ConnectionConfig, ControlLink, PortsResult, RfbPinger, connect_video,
+};
 use std::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -72,10 +78,16 @@ fn load_persisted(storage: Option<&dyn eframe::Storage>) -> PersistedState {
 
 /// Video session attempts per port selection (initial try + backoff retries).
 const MAX_VIDEO_ATTEMPTS: u32 = 4;
+/// How often the pump checks for queued input while the switch is idle.
+const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Longest stall tolerated inside one RFB message before the session is
+/// treated as dead (the Java TR socket uses 174 s).
+const RFB_BODY_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Port-list auto-refresh interval. The Java client refreshes only on
-/// demand; polling keeps busy markers fresh at negligible load (one login
-/// plus a few small queries per cycle — far less than a held session).
+/// demand; polling keeps busy markers fresh. It is a few small queries on
+/// the held control connection, not a login, so the switch sees no
+/// session churn from it.
 const PORT_AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Command-line overrides for this run: `--help`/`--version` exit early;
@@ -146,12 +158,17 @@ struct MpcApp {
     frames: Option<Receiver<FrameMessage>>,
     /// Outbound commands for the video worker; `None` with no session.
     cmd_tx: Option<Sender<VideoCommand>>,
+    /// Shared with the current video worker; `None` with no session.
+    worker: Option<Arc<WorkerFlags>>,
+    /// The one RDM login (port enumeration, video credentials, keepalive).
+    /// Created on demand from the sidebar fields; replaced by Connect.
+    control: Option<ControlLink>,
     texture: Option<egui::TextureHandle>,
     framebuffer_size: Option<(u16, u16)>,
     show_sidebar: bool,
     sort_order: SortOrder,
     /// In-flight port-list refresh; the buttons wait on it.
-    port_refresh: Option<Receiver<RefreshResult>>,
+    port_refresh: Option<Receiver<PortsResult>>,
     /// When the last refresh launched (manual or automatic); drives auto-refresh.
     last_refresh: Instant,
     /// Whether the port list re-enumerates by itself (persisted).
@@ -172,6 +189,38 @@ struct MpcApp {
     pending_video_action: Option<String>,
 }
 
+/// GUI ↔ video-worker flags. `cancel` stops a superseded connect between
+/// stages; `connecting` holds off the port-list refresh (another TLS
+/// login) while the worker's own handshakes are in flight.
+#[derive(Default)]
+struct WorkerFlags {
+    cancel: AtomicBool,
+    connecting: AtomicBool,
+}
+
+impl WorkerFlags {
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+}
+
+/// Marks the worker as connecting until dropped, so every exit path of a
+/// session attempt (including `?` returns) clears the flag.
+struct ConnectingGuard<'a>(&'a WorkerFlags);
+
+impl<'a> ConnectingGuard<'a> {
+    fn new(worker: &'a WorkerFlags) -> Self {
+        worker.connecting.store(true, Ordering::Relaxed);
+        Self(worker)
+    }
+}
+
+impl Drop for ConnectingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.connecting.store(false, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SortOrder {
     #[default]
@@ -187,9 +236,6 @@ impl SortOrder {
         }
     }
 }
-
-/// Background enumeration result: active ports + switch identity.
-type RefreshResult = Result<(Vec<Port>, SwitchInfo), String>;
 
 enum FrameMessage {
     Frame {
@@ -231,6 +277,8 @@ impl MpcApp {
             connection_status: "Ready".to_owned(),
             frames: None,
             cmd_tx: None,
+            worker: None,
+            control: None,
             texture: None,
             framebuffer_size: None,
             show_sidebar: true,
@@ -266,6 +314,9 @@ impl MpcApp {
     fn disconnect_video(&mut self) {
         self.frames = None;
         self.cmd_tx = None;
+        if let Some(worker) = self.worker.take() {
+            worker.cancel.store(true, Ordering::Relaxed);
+        }
         self.clear_frame_state();
         self.selected_port = None;
         self.confirm_cad = false;
@@ -274,6 +325,17 @@ impl MpcApp {
     fn start_video(&mut self, port: &Port) {
         let port_id = port.id.clone();
         info!(%port_id, "starting framebuffer worker");
+        // Stop a superseded worker's connect between stages so its
+        // handshakes don't compete with the new one on the switch.
+        if let Some(worker) = self.worker.take() {
+            worker.cancel.store(true, Ordering::Relaxed);
+        }
+        let worker = Arc::new(WorkerFlags::default());
+        worker.connecting.store(true, Ordering::Relaxed);
+        self.worker = Some(Arc::clone(&worker));
+        // Restart the auto-refresh clock: its login would only slow the
+        // connect down, and the busy markers are 30 s old at most anyway.
+        self.last_refresh = Instant::now();
         // Bounded channel so a fast network can't pile up 3 MiB frames.
         let (sender, receiver) = mpsc::sync_channel(2);
         let (cmd_sender, cmd_receiver) = mpsc::channel();
@@ -282,27 +344,30 @@ impl MpcApp {
         self.clear_frame_state();
         self.error = None;
         "Starting framebuffer worker".clone_into(&mut self.connection_status);
-        // Snapshot connection values; later UI edits apply to the next session.
-        let host = self.host.clone();
-        let user = self.user.clone();
-        let password = self.password.clone();
+        // Shares the one login: the worker only does the RFB handshake.
+        let link = self.control_link().clone();
         thread::spawn(move || {
-            let config = ConnectionConfig {
-                host,
-                user,
-                password,
-            };
             // The pump only exits on error; reboots are survived inline,
             // so these retries cover hard drops (failover, network blips).
             for attempt in 1..=MAX_VIDEO_ATTEMPTS {
+                if worker.cancelled() {
+                    return;
+                }
                 // Drop stale queued input so a reconnect doesn't replay it.
                 while cmd_receiver.try_recv().is_ok() {}
-                match run_video_session(&config, &port_id, &sender, &cmd_receiver) {
+                match run_video_session(&link, &port_id, &worker, &sender, &cmd_receiver) {
                     Ok(()) => return,
+                    Err(error) if error.downcast_ref::<Cancelled>().is_some() => {
+                        info!(%error, "video worker superseded; exiting");
+                        return;
+                    }
                     Err(error) => {
                         error!(%error, attempt, "video session failed");
                         if attempt < MAX_VIDEO_ATTEMPTS {
-                            let wait = Duration::from_secs(1 << attempt.min(3));
+                            // 1, 2, 4 s: the switch reaps the old session
+                            // within about a second, so the first retry
+                            // needn't wait longer.
+                            let wait = Duration::from_secs(1 << (attempt - 1).min(2));
                             let message = format!(
                                 "Connection lost — retrying ({attempt}/{MAX_VIDEO_ATTEMPTS})"
                             );
@@ -337,41 +402,52 @@ impl MpcApp {
         order
     }
 
-    /// Re-runs port enumeration off the UI thread; inert while one is in flight.
+    /// The control link, started from the sidebar fields if there is none.
+    /// Later field edits apply on Connect, which replaces it.
+    fn control_link(&mut self) -> &ControlLink {
+        self.control.get_or_insert_with(|| {
+            ControlLink::spawn(ConnectionConfig {
+                host: self.host.clone(),
+                user: self.user.clone(),
+                password: self.password.clone(),
+            })
+        })
+    }
+
+    /// Re-runs port enumeration on the control thread; inert while one is
+    /// in flight.
     fn refresh_ports(&mut self) {
         if self.port_refresh.is_some() {
             return;
         }
         info!(host = %self.host, "refreshing port list");
-        let (sender, receiver) = mpsc::channel();
-        self.port_refresh = Some(receiver);
+        self.port_refresh = Some(self.control_link().request_ports());
         self.last_refresh = Instant::now();
         "Refreshing ports".clone_into(&mut self.connection_status);
         self.error = None;
-        let host = self.host.clone();
-        let user = self.user.clone();
-        let password = self.password.clone();
-        thread::spawn(move || {
-            let _ = sender.send(enumerate_active_ports(&host, &user, &password));
-        });
+    }
+
+    /// Drops the control link (closing the login), and with it the ports.
+    fn drop_switch(&mut self) {
+        self.disconnect_video();
+        self.control = None;
+        self.port_refresh = None;
+        self.ports.clear();
+        self.switch_info = None;
     }
 
     fn reconnect(&mut self) {
-        self.disconnect_video();
-        self.ports.clear();
-        self.switch_info = None;
+        self.drop_switch();
         self.refresh_ports();
     }
 
     fn disconnect_switch(&mut self) {
-        self.disconnect_video();
-        self.ports.clear();
-        self.switch_info = None;
+        self.drop_switch();
         "Disconnected".clone_into(&mut self.connection_status);
     }
 
     /// Applies a finished refresh, keeping the selection if possible.
-    fn apply_refresh(&mut self, result: RefreshResult) {
+    fn apply_refresh(&mut self, result: PortsResult) {
         self.port_refresh = None;
         match result {
             Ok((ports, switch_info)) => {
@@ -470,82 +546,53 @@ impl MpcApp {
     }
 }
 
-/// Port enumeration filtered to available + busy ports (status 1/2).
-fn enumerate_active_ports(host: &str, user: &str, password: &str) -> RefreshResult {
-    let mut client =
-        RdmClient::connect(host, user, password).map_err(|error| format!("{error:?}"))?;
-    let ports = client
-        .enumerate_ports()
-        .map(|ports| ports.into_iter().filter(Port::is_listed).collect())
-        .map_err(|error| format!("{error:?}"))?;
-    Ok((ports, client.switch_info().clone()))
-}
-
-/// One video session: RDM login, RFB handshake, then the pump loop
-/// until the first hard error.
+/// One video session: credentials from the control link, RFB handshake,
+/// then the pump loop until the first hard error.
 fn run_video_session(
-    config: &ConnectionConfig,
+    link: &ControlLink,
     port_id: &str,
+    worker: &WorkerFlags,
     sender: &mpsc::SyncSender<FrameMessage>,
     cmd_receiver: &mpsc::Receiver<VideoCommand>,
 ) -> eyre::Result<()> {
+    let _guard = ConnectingGuard::new(worker);
     let status = |message: &str| {
         let _ = sender.send(FrameMessage::Status(message.to_owned()));
         info!(%message, "framebuffer connection stage");
     };
-    status("Connecting to RDM");
+    status("Requesting session credentials");
     info!(%port_id, "connecting video session");
     // NOTE: the TR video-stream grant (cmd 55) is skipped (never
-    // answered; RFB streams without it). `establish_video` also holds
-    // the RDM event session.
-    let mut session = establish_video(config, port_id)?;
+    // answered; RFB streams without it). The control thread holds the
+    // login and the RDM event session.
+    let creds = link.credentials().map_err(|error| eyre::eyre!(error))?;
+    status("Connecting RFB");
+    let mut rfb = connect_video(link.host(), &creds, port_id, &|| worker.cancelled())?;
+    worker.connecting.store(false, Ordering::Relaxed);
     status("RFB connected; waiting for framebuffer");
-    let rfb = &mut session.rfb;
+    let rfb = &mut rfb;
     let (width, height) = rfb
         .framebuffer_size()
         .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
     let format = PixelFormat::RGB565;
     let mut framebuffer = Framebuffer::try_new(width, height)?;
-    // Short read timeout so queued input flushes promptly. NOTE: keep it
-    // generous — 20 ms fired mid-update and desynced the stream.
-    rfb.set_read_timeout(Some(Duration::from_millis(100)))?;
+    // Idle polling goes through `wait_for_message`, so this only bounds a
+    // stall inside a message (a dead connection). A short timeout here used
+    // to fire mid-update and desync the stream.
+    rfb.set_read_timeout(Some(RFB_BODY_TIMEOUT))?;
     // Keys held on the target; all are released on exit so none stays stuck down.
     let mut held: Vec<u16> = Vec::new();
     let mut dropped_frames: u64 = 0;
+    let mut pinger = RfbPinger::new();
     let result = (|| -> eyre::Result<()> {
         loop {
-            // The switch reaps idle sessions: RFB ping every 20 s, RDM
-            // query every 29 s, like the Java client.
-            session.keepalive()?;
-            let rfb = &mut session.rfb;
+            // Keeps the video channel alive (Java `PingTimer`); the control
+            // thread keeps the RDM session alive.
+            pinger.tick(rfb)?;
             // Drain all queued input first; every event goes through, never dropped.
             loop {
                 match cmd_receiver.try_recv() {
-                    Ok(command) => match command {
-                        VideoCommand::Key { eric, down } => {
-                            rfb.write_key_event(eric, down)?;
-                            if down {
-                                if !held.contains(&eric) {
-                                    held.push(eric);
-                                }
-                            } else if let Some(index) = held.iter().position(|held| *held == eric) {
-                                held.swap_remove(index);
-                            }
-                        }
-                        VideoCommand::VideoSettings { setting, value } => {
-                            info!(setting, value, "sending video-settings event");
-                            rfb.write_video_settings_event(setting, value)?;
-                        }
-                        VideoCommand::Pointer {
-                            buttons,
-                            x,
-                            y,
-                            wheel,
-                        } => {
-                            tracing::trace!(buttons, x, y, wheel, "sending pointer event");
-                            rfb.write_pointer_event(buttons, x, y, wheel)?;
-                        }
-                    },
+                    Ok(command) => send_command(rfb, command, &mut held)?,
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // GUI dropped cmd_tx: exit instead of idling forever.
@@ -554,11 +601,12 @@ fn run_video_session(
                     }
                 }
             }
-            let update = match rfb.read_message() {
-                Ok(update) => update,
-                // Idle poll: loop back to observe command-channel disconnects.
-                Err(error) if is_read_timeout(&error) => continue,
-                Err(error) => return Err(error),
+            // Idle poll: loop back to flush input and observe channel closes.
+            if !rfb.wait_for_message(INPUT_POLL_INTERVAL)? {
+                continue;
+            }
+            let Some(update) = rfb.read_one_message()? else {
+                continue;
             };
             // Late 128 format changes resize the stream: recreate the pixel
             // buffer or rects clip and misalign.
@@ -597,7 +645,6 @@ fn run_video_session(
             rfb.request_framebuffer_update(true)?;
         }
     })();
-    let rfb = &mut session.rfb;
     for eric in held {
         let _ = rfb.write_key_event(eric, false);
     }
@@ -606,17 +653,39 @@ fn run_video_session(
     result
 }
 
-/// True when the error is just the idle read timeout, not a real failure.
-fn is_read_timeout(error: &eyre::Report) -> bool {
-    error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .is_some_and(|io| {
-            matches!(
-                io.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            )
-        })
+/// Writes one GUI command to the target, tracking held keys so they can
+/// be released when the session ends.
+fn send_command(
+    rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>,
+    command: VideoCommand,
+    held: &mut Vec<u16>,
+) -> eyre::Result<()> {
+    match command {
+        VideoCommand::Key { eric, down } => {
+            rfb.write_key_event(eric, down)?;
+            if down {
+                if !held.contains(&eric) {
+                    held.push(eric);
+                }
+            } else if let Some(index) = held.iter().position(|held| *held == eric) {
+                held.swap_remove(index);
+            }
+        }
+        VideoCommand::VideoSettings { setting, value } => {
+            info!(setting, value, "sending video-settings event");
+            rfb.write_video_settings_event(setting, value)?;
+        }
+        VideoCommand::Pointer {
+            buttons,
+            x,
+            y,
+            wheel,
+        } => {
+            tracing::trace!(buttons, x, y, wheel, "sending pointer event");
+            rfb.write_pointer_event(buttons, x, y, wheel)?;
+        }
+    }
+    Ok(())
 }
 
 /// RFB button bit for an egui pointer button.
@@ -895,9 +964,16 @@ impl eframe::App for MpcApp {
         // connected (`switch_info` is cleared by Disconnect and absent until
         // the first success, so this never fights those states or spams
         // errors for an empty host); in-flight refreshes stay inert.
+        // Skipped while a video worker is still in its handshakes: the
+        // enumeration would queue ahead of its credential request.
+        let video_connecting = self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.connecting.load(Ordering::Relaxed));
         if self.auto_refresh
             && self.switch_info.is_some()
             && !self.host.trim().is_empty()
+            && !video_connecting
             && self.last_refresh.elapsed() >= PORT_AUTO_REFRESH_INTERVAL
         {
             self.refresh_ports();

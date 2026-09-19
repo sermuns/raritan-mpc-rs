@@ -1,11 +1,22 @@
 //! End-to-end video session orchestration shared by the CLI and GUI:
-//! RDM login → credentials → best-effort event session → RFB handshake → pump.
+//! RDM login → credentials → RFB handshake → pump, with the event session
+//! opened alongside. The GUI keeps one login for its lifetime
+//! ([`ControlLink`]); the CLI logs in per run ([`establish_video`]).
 
-use eyre::{OptionExt, WrapErr};
+pub mod control;
+
+pub use control::{ControlLink, PortsResult, RDM_KEEPALIVE_INTERVAL};
+pub use raritan_common::SessionCreds;
+
+use eyre::OptionExt;
 use raritan_rdm::{Port, RdmClient};
 use raritan_rfb::{Framebuffer, PixelFormat, RfbStream};
-use std::{net::TcpStream, time::Duration};
-use tracing::{debug, info, warn};
+use std::{
+    io::{Read, Write},
+    net::TcpStream,
+    time::{Duration, Instant},
+};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
@@ -47,93 +58,128 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
     }
 }
 
-/// A live video session. The RDM control connection must outlive the
-/// video: the switch reaps the session (event socket first, then RFB)
-/// once its owner disconnects or idles; see [`VideoSession::keepalive`].
+/// A video session owning its own RDM login (the CLI path). The RDM
+/// connection must outlive the video: the switch reaps the session (event
+/// socket first, then RFB) once its owner disconnects or idles.
 pub struct VideoSession {
     pub rdm: RdmClient,
     pub rfb: RfbStream<TcpStream>,
-    last_rdm_keepalive: std::time::Instant,
-    last_rfb_ping: std::time::Instant,
-    rfb_ping_serial: u32,
 }
 
-/// Java `TRKeepAliveThread`: 58 s "not responding" limit, ping at half.
-pub const RDM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(29);
 /// Java `PingTimer`: RFB ping request every 20 s.
 pub const RFB_PING_INTERVAL: Duration = Duration::from_secs(20);
 
-impl VideoSession {
-    /// Sends whichever keepalives are due; call from the pump loop at
-    /// least every few seconds. Errors mean the session is going away.
-    pub fn keepalive(&mut self) -> eyre::Result<()> {
-        let now = std::time::Instant::now();
-        if now.duration_since(self.last_rfb_ping) >= RFB_PING_INTERVAL {
-            self.rfb_ping_serial = self.rfb_ping_serial.wrapping_add(1);
-            debug!(serial = self.rfb_ping_serial, "sending RFB ping request");
-            self.rfb
-                .write_ping_request(self.rfb_ping_serial)
-                .wrap_err("RFB ping request")?;
-            self.last_rfb_ping = now;
+/// Client-side RFB ping (Java `PingTimer`). Call [`RfbPinger::tick`] from
+/// the pump loop at least every few seconds.
+pub struct RfbPinger {
+    last: Instant,
+    serial: u32,
+}
+
+impl Default for RfbPinger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RfbPinger {
+    pub fn new() -> Self {
+        Self {
+            last: Instant::now(),
+            serial: 0,
         }
-        if now.duration_since(self.last_rdm_keepalive) >= RDM_KEEPALIVE_INTERVAL {
-            self.rdm.keepalive().wrap_err("RDM keepalive")?;
-            self.last_rdm_keepalive = now;
+    }
+
+    pub fn tick<S: Read + Write>(&mut self, rfb: &mut RfbStream<S>) -> eyre::Result<()> {
+        if self.last.elapsed() < RFB_PING_INTERVAL {
+            return Ok(());
         }
+        self.serial = self.serial.wrapping_add(1);
+        debug!(serial = self.serial, "sending RFB ping request");
+        rfb.write_ping_request(self.serial)?;
+        self.last = Instant::now();
         Ok(())
     }
 }
 
-/// Opens the full video path (RDM → credentials → event session → RFB).
-/// The TR grant (cmd 55) is skipped — the switch never answers it.
-pub fn establish_video(config: &ConnectionConfig, port_id: &str) -> eyre::Result<VideoSession> {
+/// Returned by [`establish_video`] when `cancelled` fired between stages.
+/// Callers should exit quietly (no retry, no error shown).
+#[derive(Debug)]
+pub struct Cancelled {
+    pub stage: &'static str,
+}
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "video connect cancelled before {}", self.stage)
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+fn check_cancel(cancelled: &dyn Fn() -> bool, stage: &'static str) -> eyre::Result<()> {
+    if cancelled() {
+        return Err(Cancelled { stage }.into());
+    }
+    Ok(())
+}
+
+/// RFB handshake on an existing RDM session, plus the stuck-key release.
+/// `cancelled` is polled between stages (see [`establish_video`]).
+pub fn connect_video(
+    host: &str,
+    creds: &SessionCreds,
+    port_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> eyre::Result<RfbStream<TcpStream>> {
+    check_cancel(cancelled, "RFB connect")?;
+    info!(%port_id, "connecting RFB session");
+    let started = Instant::now();
+    let mut rfb = RfbStream::connect_raritan(host, &creds.session_id, &creds.session_key, port_id)?;
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "RFB handshake done"
+    );
+    check_cancel(cancelled, "key release")?;
+    // Clear key state stuck from an earlier session: the switch keeps
+    // per-target key state, so only the target can release it.
+    rfb.release_all_keys()?;
+    Ok(rfb)
+}
+
+/// Opens the full video path with its own login (RDM → credentials → RFB
+/// → event session). The TR grant (cmd 55) is skipped — the switch never
+/// answers it.
+///
+/// `cancelled` is polled between stages: a superseded connect stops
+/// within one stage instead of finishing every handshake. Each stage is
+/// a TLS 1.0 handshake the switch serialises, so an abandoned connect
+/// running alongside a live one roughly doubles the live one's time.
+pub fn establish_video(
+    config: &ConnectionConfig,
+    port_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> eyre::Result<VideoSession> {
     info!(%port_id, "connecting RDM video session");
-    let started = std::time::Instant::now();
+    let started = Instant::now();
+    check_cancel(cancelled, "RDM login")?;
     // Only credentials are needed here, not the inventory.
     let mut rdm = RdmClient::connect(&config.host, &config.user, &config.password)?;
     info!(
         elapsed_ms = started.elapsed().as_millis(),
         "RDM connect done"
     );
+    check_cancel(cancelled, "RDM credentials")?;
     rdm.fetch_session_credentials()?;
-    info!(
-        elapsed_ms = started.elapsed().as_millis(),
-        "RDM credentials done"
-    );
-    let (session_id, session_key) = rdm
+    let creds = rdm
         .session_credentials()
-        .map(|(id, key)| (id.to_owned(), key.to_owned()))?;
+        .map(|(id, key)| SessionCreds::new(id, key))?;
+    let rfb = connect_video(&config.host, &creds, port_id, cancelled)?;
     // The Java client holds the event session while video runs; video works
-    // without it, so failures only warn. RFB goes first so its update
-    // requests reach the switch ASAP.
-    info!(%port_id, "connecting RFB session");
-    let mut rfb = RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)?;
-    info!(
-        elapsed_ms = started.elapsed().as_millis(),
-        "RFB handshake done"
-    );
-    if let Err(error) = rdm.open_event_session(&session_id, &session_key) {
-        warn!(%error, "RDM event session failed; continuing without it");
-    }
-    info!(
-        elapsed_ms = started.elapsed().as_millis(),
-        "RDM event session done"
-    );
-    // Clear key state stuck from an earlier session: the switch keeps
-    // per-target key state, so only the target can release it.
-    rfb.release_all_keys()?;
-    info!(
-        elapsed_ms = started.elapsed().as_millis(),
-        "cleared stuck keys"
-    );
-    let now = std::time::Instant::now();
-    Ok(VideoSession {
-        rdm,
-        rfb,
-        last_rdm_keepalive: now,
-        last_rfb_ping: now,
-        rfb_ping_serial: 0,
-    })
+    // without it, so it is opened off the critical path (its TLS handshake
+    // is ~2 s of connect time) and failures only warn.
+    rdm.spawn_event_session(&creds.session_id, &creds.session_key);
+    Ok(VideoSession { rdm, rfb })
 }
 
 /// Reads `n` framebuffer updates into a fresh RGB565 framebuffer.

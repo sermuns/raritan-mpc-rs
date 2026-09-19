@@ -32,7 +32,11 @@ Reference: decompiled `javaclientlib.clientlib` (`TRConnection`,
   SessionID="…"/>`, TLS, then the RC4 `CSC_Test2` dance from
   `CSCConnect.CSC_Test` (key = session key, probe string
   `"1234567890"` time-XORed). Held open with a background drain,
-  mirroring Java's always-on event loop.
+  mirroring Java's always-on event loop. `spawn_event_session` runs the
+  whole connect on a thread (its TLS handshake is ~2 s on the switch).
+- `keepalive()`: the Java `GET_DEVICE_ID` query. The switch reaps an idle
+  session (event socket first, then RFB), so the holder of the
+  connection sends this after 29 s without traffic.
 
 ## Notify subscription
 

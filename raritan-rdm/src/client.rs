@@ -12,7 +12,7 @@ use raritan_common::{
     escape_xml, read_frame, tls_connector,
 };
 use std::net::TcpStream;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const SELECT_IP_REACH_PORTS: &str = "<Database><Get><Select>/System/Device[@Type='IP-Reach']/Port</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>";
 const SELECT_SESSION_ID: &str = "<Session><GetSessionID/></Session>";
@@ -121,6 +121,12 @@ impl RdmClient {
     /// Fetches just the session credentials (one query): the video path
     /// needs no port inventory.
     pub fn fetch_session_credentials(&mut self) -> eyre::Result<()> {
+        // Once per connection, like the Java client: a live video stream
+        // authenticated with these, so they must not be rotated under it.
+        if self.session_id.is_some() {
+            debug!("reusing RDM session credentials");
+            return Ok(());
+        }
         info!("requesting RDM session credentials");
         let session: SessionResponse = from_str(&self.database_query(SELECT_SESSION_ID)?)?;
         let data = session.get_session_id;
@@ -194,10 +200,28 @@ impl RdmClient {
     /// connecting video: `:5000` → `StartSession(RDMEvent)` → TLS → RC4
     /// `CSC_Test2`. Drained in the background like Java's event loop.
     pub fn open_event_session(&self, session_id: &str, session_key: &str) -> eyre::Result<()> {
+        Self::open_event_session_on(&self.host, session_id, session_key)
+    }
+
+    /// `open_event_session` off the critical path: its TLS handshake costs
+    /// ~2 s on the switch and video does not depend on it, so the connect
+    /// runs on its own thread and failures only warn.
+    pub fn spawn_event_session(&self, session_id: &str, session_key: &str) {
+        let host = self.host.clone();
+        let session_id = session_id.to_owned();
+        let session_key = session_key.to_owned();
+        std::thread::spawn(move || {
+            if let Err(error) = Self::open_event_session_on(&host, &session_id, &session_key) {
+                warn!(error = %format!("{error:#}"), "RDM event session failed; continuing without it");
+            }
+        });
+    }
+
+    fn open_event_session_on(host: &str, session_id: &str, session_key: &str) -> eyre::Result<()> {
         info!(%session_id, "opening RDM event session");
-        let mut socket = Self::tcp_connect(&self.host)?;
+        let mut socket = Self::tcp_connect(host)?;
         csc_start_session(&mut socket, "RDMEvent", Some(session_id))?;
-        let mut tls = Self::tls_upgrade(&self.host, socket)?;
+        let mut tls = Self::tls_upgrade(host, socket)?;
         csc_test2(&mut tls, session_key)?;
         info!("RDM event session established");
         // NOTE: detached drain thread owns the event socket, so each

@@ -40,36 +40,48 @@ pub(crate) fn validate_framebuffer_dimensions(width: u16, height: u16) -> Result
 }
 
 impl<S: Read + Write> RfbStream<S> {
+    /// Blocks until the next framebuffer update, handling everything else inline.
     pub fn read_message(&mut self) -> Result<FramebufferUpdate> {
-        if let Some(update) = self.pending_updates.pop_front() {
-            return Ok(update);
-        }
         loop {
-            let message_type = read_u8(&mut self.stream)?;
-            trace!(message_type, "received RFB server message");
-            match message_type {
-                FRAMEBUFFER_UPDATE => return self.read_framebuffer_update(),
-                PING_REQUEST => {
-                    let serial = self.read_ping_serial()?;
-                    self.write_ping_reply(serial)?;
-                }
-                PING_REPLY => {
-                    let _ = self.read_ping_serial()?;
-                }
-                BANDWIDTH_REQUEST => {
-                    // RfbHandler.processBandwidthRequest: reply(1), read, reply(2).
-                    self.write_bandwidth_reply(1)?;
-                    self.read_bandwidth_request()?;
-                    self.write_bandwidth_reply(2)?;
-                }
-                SERVER_FB_FORMAT => {
-                    let (width, height, _) = self.read_server_fb_format()?;
-                    info!(width, height, "framebuffer format changed");
-                    self.framebuffer_size = Some((width, height));
-                }
-                _ => self.skip_server_message(message_type)?,
+            if let Some(update) = self.read_one_message()? {
+                return Ok(update);
             }
         }
+    }
+
+    /// Reads exactly one server message: `Some` for a framebuffer update,
+    /// `None` for anything else (answered or skipped inline). Returning per
+    /// message lets the pump interleave input without a socket timeout that
+    /// could fire mid-message.
+    pub fn read_one_message(&mut self) -> Result<Option<FramebufferUpdate>> {
+        if let Some(update) = self.pending_updates.pop_front() {
+            return Ok(Some(update));
+        }
+        let message_type = read_u8(&mut self.stream)?;
+        trace!(message_type, "received RFB server message");
+        match message_type {
+            FRAMEBUFFER_UPDATE => return self.read_framebuffer_update().map(Some),
+            PING_REQUEST => {
+                let serial = self.read_ping_serial()?;
+                self.write_ping_reply(serial)?;
+            }
+            PING_REPLY => {
+                let _ = self.read_ping_serial()?;
+            }
+            BANDWIDTH_REQUEST => {
+                // RfbHandler.processBandwidthRequest: reply(1), read, reply(2).
+                self.write_bandwidth_reply(1)?;
+                self.read_bandwidth_request()?;
+                self.write_bandwidth_reply(2)?;
+            }
+            SERVER_FB_FORMAT => {
+                let (width, height, _) = self.read_server_fb_format()?;
+                info!(width, height, "framebuffer format changed");
+                self.framebuffer_size = Some((width, height));
+            }
+            _ => self.skip_server_message(message_type)?,
+        }
+        Ok(None)
     }
 
     fn read_ping_serial(&mut self) -> Result<u32> {
