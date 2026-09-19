@@ -759,13 +759,6 @@ fn sidebar_toggle_hover(expanded: bool) -> &'static str {
     }
 }
 
-/// Top-bar height, fixed up front so smaller widgets center vertically
-/// (a plain horizontal row grows as widgets land).
-fn top_bar_height(ui: &egui::Ui) -> f32 {
-    ui.text_style_height(&egui::TextStyle::Heading)
-        .max(ui.spacing().interact_size.y)
-}
-
 impl eframe::App for MpcApp {
     /// Persists connection values via eframe storage (written on exit).
     /// Note: the password is stored in plaintext, like the CLI flags.
@@ -1044,52 +1037,39 @@ impl eframe::App for MpcApp {
                     .name
                     .clone()
                     .unwrap_or_else(|| "Selected port".to_owned());
-                let port_id = self.ports[index].id.clone();
-                // Fixed-height row so heading, labels and buttons all center vertically.
-                let row_height = top_bar_height(ui);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), row_height),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        let expanded = self.show_sidebar;
-                        ui.toggle_value(&mut self.show_sidebar, sidebar_toggle_label(expanded))
-                            .on_hover_text(sidebar_toggle_hover(expanded));
-                        ui.heading(&port_name);
-                        ui.label(format!("Port ID: {port_id}"));
-                        if self.cmd_tx.is_some() {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.button("× Disconnect").clicked() {
-                                        // Drop our channel ends; the worker exits on its next failed send.
-                                        self.disconnect_video();
-                                        "Disconnected".clone_into(&mut self.connection_status);
-                                    }
-                                    if ui.button("⌨ Ctrl+Alt+Del").clicked() {
-                                        self.confirm_cad = true;
-                                    }
-                                    // Manual video actions, mirroring the Java client
-                                    // (setting 18 = auto-sense, 19 = calibration).
-                                    for (label, setting, waiting) in [
-                                        ("◎ Auto sense", 18, "Auto-sensing video…"),
-                                        ("🎨 Calibrate color", 19, "Calibrating color…"),
-                                    ] {
-                                        if ui.button(label).clicked()
-                                            && let Some(tx) = &self.cmd_tx
-                                        {
-                                            let _ = tx.send(VideoCommand::VideoSettings {
-                                                setting,
-                                                value: 0,
-                                            });
-                                            // The switch pauses frames while working; notice clears on resume.
-                                            self.pending_video_action = Some(waiting.to_owned());
-                                        }
-                                    }
-                                },
-                            );
-                        }
-                    },
-                );
+                ui.horizontal(|ui| {
+                    let expanded = self.show_sidebar;
+                    ui.toggle_value(&mut self.show_sidebar, sidebar_toggle_label(expanded))
+                        .on_hover_text(sidebar_toggle_hover(expanded));
+                    ui.strong(&port_name);
+                    if self.cmd_tx.is_some() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("× Disconnect").clicked() {
+                                // Drop our channel ends; the worker exits on its next failed send.
+                                self.disconnect_video();
+                                "Disconnected".clone_into(&mut self.connection_status);
+                            }
+                            if ui.button("⌨ Ctrl+Alt+Del").clicked() {
+                                self.confirm_cad = true;
+                            }
+                            // Manual video actions, mirroring the Java client
+                            // (setting 18 = auto-sense, 19 = calibration).
+                            for (label, setting, waiting) in [
+                                ("◎ Auto sense", 18, "Auto-sensing video…"),
+                                ("🎨 Calibrate color", 19, "Calibrating color…"),
+                            ] {
+                                if ui.button(label).clicked()
+                                    && let Some(tx) = &self.cmd_tx
+                                {
+                                    let _ =
+                                        tx.send(VideoCommand::VideoSettings { setting, value: 0 });
+                                    // The switch pauses frames while working; notice clears on resume.
+                                    self.pending_video_action = Some(waiting.to_owned());
+                                }
+                            }
+                        });
+                    }
+                });
                 if let Some(error) = &self.error {
                     ui.colored_label(egui::Color32::RED, error);
                 }
@@ -1143,19 +1123,14 @@ impl eframe::App for MpcApp {
                     });
                 }
             } else {
-                let row_height = top_bar_height(ui);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), row_height),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        let expanded = self.show_sidebar;
-                        ui.toggle_value(&mut self.show_sidebar, sidebar_toggle_label(expanded))
-                            .on_hover_text(sidebar_toggle_hover(expanded));
-                        if let Some(error) = &self.error {
-                            ui.colored_label(egui::Color32::RED, error);
-                        }
-                    },
-                );
+                ui.horizontal(|ui| {
+                    let expanded = self.show_sidebar;
+                    ui.toggle_value(&mut self.show_sidebar, sidebar_toggle_label(expanded))
+                        .on_hover_text(sidebar_toggle_hover(expanded));
+                    if let Some(error) = &self.error {
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
+                });
                 ui.separator();
                 ui.centered_and_justified(|ui| {
                     ui.heading("Select a KVM port");
