@@ -1060,10 +1060,11 @@ impl eframe::App for MpcApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .show(ui, |ui| {
-                            egui::Grid::new("port_list")
-                                .striped(true)
-                                .num_columns(1)
-                                .show(ui, |ui| {
+                            // Justified so every port row is equally wide
+                            // (full list width) instead of hugging its text.
+                            ui.with_layout(
+                                egui::Layout::top_down_justified(egui::Align::LEFT),
+                                |ui| {
                                     for index in order {
                                         let port = &self.ports[index];
                                         let label = format!(
@@ -1090,9 +1091,9 @@ impl eframe::App for MpcApp {
                                                 ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
                                             }
                                         }
-                                        ui.end_row();
                                     }
-                                });
+                                },
+                            );
                         });
                 });
         }
