@@ -36,6 +36,35 @@ impl RfbStream<TcpStream> {
         Ok(self.stream.read_timeout()?)
     }
 
+    /// Waits up to `timeout` for the next server message to begin, without
+    /// consuming it; `false` on timeout. Bodies are then read under the
+    /// socket's own (long) read timeout, so an idle poll can never split a
+    /// message: a short socket timeout inside `read_exact` drops the bytes
+    /// already read and desyncs the stream.
+    pub fn wait_for_message(&self, timeout: std::time::Duration) -> Result<bool> {
+        if !self.pending_updates.is_empty() {
+            return Ok(true);
+        }
+        let body_timeout = self.stream.read_timeout()?;
+        self.stream.set_read_timeout(Some(timeout))?;
+        let mut first = [0u8; 1];
+        let peeked = self.stream.peek(&mut first);
+        self.stream.set_read_timeout(body_timeout)?;
+        match peeked {
+            Ok(0) => bail!("RFB connection closed by the switch"),
+            Ok(_) => Ok(true),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Plaintext video channel (the Java default: `ssl == false`).
     pub fn connect_raritan(
         host: &str,

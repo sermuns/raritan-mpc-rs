@@ -64,7 +64,9 @@ SSLKEYLOGFILE=/tmp/opencode/ourskeys.log raritan-cli ...
   pre-TLS + auth), `event` (`CSC_Test2`), `tr` (legacy binary TR grant
   diagnostics), `model` (port parsing); `protocol` re-exports common.
 - `raritan-session/src/lib.rs` — end-to-end video flow (RDM login →
-  event session → RFB → frame capture) shared by CLI and GUI.
+  RFB → event session → frame capture) shared by CLI and GUI;
+  `control.rs` is the GUI's single long-lived RDM connection (port
+  enumeration, video credentials, keepalive) served over a channel.
 - `raritan-cli/src/main.rs` — list/capture/dump commands.
 - `raritan-mpc/src/main.rs` — egui app; video worker calls
   `raritan-session::establish_video`.

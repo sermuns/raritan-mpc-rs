@@ -95,7 +95,7 @@ fn main() -> color_eyre::Result<()> {
         password: args.password.clone(),
     };
     // `session` holds the RDM control connection open for the capture.
-    let mut session = establish_video(&config, &port_id)?;
+    let mut session = establish_video(&config, &port_id, &|| false)?;
     let (framebuffer, seen_encodings, total_rects) = capture_frames(&mut session.rfb, args.frames)?;
     info!(?seen_encodings, total_rects, "capture finished");
 

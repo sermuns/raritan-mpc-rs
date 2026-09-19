@@ -2214,6 +2214,7 @@ name = "raritan-session"
 version = "1.4.0"
 dependencies = [
  "eyre",
+ "raritan-common",
  "raritan-rdm",
  "raritan-rfb",
  "tracing",
