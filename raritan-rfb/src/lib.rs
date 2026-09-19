@@ -14,6 +14,7 @@ pub mod transport;
 
 pub use framebuffer::{Framebuffer, FramebufferRectangle, FramebufferUpdate, PixelFormat};
 pub use input::{VideoCommand, eric_code};
+pub use pump::{Incoming, UpdateHeader};
 pub use stream::RfbStream;
 
 #[cfg(test)]
@@ -204,5 +205,47 @@ mod tests {
             .filter(|pixel| pixel[3] != 0)
             .count();
         assert_eq!(painted, 16 * 16);
+    }
+
+    /// The worker's pipelining contract: `poll_incoming` exposes the header
+    /// while the body is still unread, so the next update request goes out
+    /// between the two (as Java's `processFramebufferUpdate` does). The
+    /// split read must decode exactly what the single read does.
+    #[test]
+    fn pipelined_header_body_split_matches_single_read() {
+        // Raw 2x1 RGB565 rect: rect header (16 B) + 4 B of pixels.
+        let mut server = vec![0, 0, 0, 1];
+        server.extend_from_slice(&20u32.to_be_bytes());
+        server.extend_from_slice(&[0, 0, 0, 0, 0, 2, 0, 1]);
+        server.extend_from_slice(&0i32.to_be_bytes());
+        server.extend_from_slice(&4u32.to_be_bytes());
+        server.extend_from_slice(&[0xF8, 0x00, 0x00, 0x1F]);
+
+        let mut single = RfbStream::new(FakeStream::new(server.clone()));
+        let expected = single.read_one_message().unwrap().unwrap();
+
+        let mut split = RfbStream::new(FakeStream::new(server));
+        let header = match split.poll_incoming().unwrap() {
+            crate::pump::Incoming::Live(header) => header,
+            other => panic!("expected live header, got {other:?}"),
+        };
+        assert_eq!((header.flags, header.count, header.size), (0, 1, 20));
+        // The pipelined request goes out before the body is consumed.
+        split.request_region_update(0, 0, 2, 1, true).unwrap();
+        let update = split.read_update_body(&header).unwrap();
+        assert_eq!(update, expected);
+        assert_eq!(
+            split.stream.written,
+            vec![3, 1, 0, 0, 0, 0, 0, 2, 0, 1]
+        );
+        // Red then blue pixel, opaque.
+        let mut framebuffer = Framebuffer::new(2, 1);
+        framebuffer
+            .apply_update(&update, PixelFormat::RGB565)
+            .unwrap();
+        assert_eq!(
+            framebuffer.rgba,
+            vec![255, 0, 0, 255, 0, 0, 255, 255]
+        );
     }
 }

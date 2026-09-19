@@ -586,21 +586,79 @@ fn run_video_session(
     rfb.set_read_timeout(Some(RFB_BODY_TIMEOUT))?;
     // Keys held on the target; all are released on exit so none stays stuck down.
     let mut held: Vec<u16> = Vec::new();
+    let result = run_pump(rfb, cmd_receiver, sender, &mut framebuffer, format, &mut held);
+    for eric in held {
+        let _ = rfb.write_key_event(eric, false);
+    }
+    // Release held mouse buttons too.
+    let _ = rfb.write_pointer_event(0, 0, 0, 0);
+    result
+}
+
+/// Steady-state video pump: drains GUI input, serves the RFB message flow
+/// with the next update requested while each body is still on the wire
+/// (Java `processFramebufferUpdate`), and forwards decoded frames.
+/// Exits when a channel closes or the stream errors.
+fn run_pump(
+    rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>,
+    cmd_receiver: &mpsc::Receiver<VideoCommand>,
+    sender: &mpsc::SyncSender<FrameMessage>,
+    framebuffer: &mut Framebuffer,
+    format: PixelFormat,
+    held: &mut Vec<u16>,
+) -> eyre::Result<()> {
     let mut dropped_frames: u64 = 0;
     let mut pinger = RfbPinger::new();
-    let result = (|| -> eyre::Result<()> {
-        // Drains queued input to the switch; true when the GUI went away.
-        // Every event goes through, never dropped.
         let mut drain = |rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>| -> eyre::Result<bool> {
             loop {
                 match cmd_receiver.try_recv() {
-                    Ok(command) => send_command(rfb, command, &mut held)?,
+                    Ok(command) => send_command(rfb, command, &mut *held)?,
                     Err(mpsc::TryRecvError::Empty) => return Ok(false),
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // GUI dropped cmd_tx: exit instead of idling forever.
                         info!("video worker: command channel closed; exiting");
                         return Ok(true);
                     }
+                }
+            }
+        };
+        // Applies one decoded update to the pixel buffer and forwards it
+        // to the GUI; true when the frame receiver went away. Never blocks
+        // the pump: full channels drop frames to keep latency low.
+        let mut handle = |update: &raritan_rfb::FramebufferUpdate,
+                          size: Option<(u16, u16)>|
+         -> eyre::Result<bool> {
+            // Late 128 format changes resize the stream: recreate the pixel
+            // buffer or rects clip and misalign.
+            if let Some((width, height)) = size
+                && (framebuffer.width != width || framebuffer.height != height)
+            {
+                info!(width, height, "framebuffer resized; recreating buffer");
+                *framebuffer = Framebuffer::try_new(width, height)?;
+            }
+            debug!(
+                rectangles = update.rectangles.len(),
+                flags = update.flags,
+                "decoded framebuffer update"
+            );
+            framebuffer.apply_update(update, format)?;
+            match sender.try_send(FrameMessage::Frame {
+                width: framebuffer.width,
+                height: framebuffer.height,
+                rgba: framebuffer.rgba.clone(),
+            }) {
+                Ok(()) => Ok(false),
+                Err(mpsc::TrySendError::Full(_)) => {
+                    dropped_frames += 1;
+                    tracing::trace!(
+                        dropped_frames,
+                        "dropped video frame; GUI behind, keeping latency low"
+                    );
+                    Ok(false)
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    info!("video worker: frame receiver closed; exiting");
+                    Ok(true)
                 }
             }
         };
@@ -620,56 +678,28 @@ fn run_video_session(
             if drain(rfb)? {
                 return Ok(());
             }
-            let Some(update) = rfb.read_one_message()? else {
-                continue;
-            };
-            // Pipeline the next request before decoding, like Java's
-            // `processFramebufferUpdate` (request first, then decode): the
-            // server renders the next frame while this one decodes.
-            rfb.request_framebuffer_update(true)?;
-            // Late 128 format changes resize the stream: recreate the pixel
-            // buffer or rects clip and misalign.
-            if let Some((width, height)) = rfb.framebuffer_size()
-                && (framebuffer.width != width || framebuffer.height != height)
-            {
-                info!(width, height, "framebuffer resized; recreating buffer");
-                framebuffer = Framebuffer::try_new(width, height)?;
-            }
-            debug!(
-                rectangles = update.rectangles.len(),
-                flags = update.flags,
-                "decoded framebuffer update"
-            );
-            framebuffer.apply_update(&update, format)?;
-            // Never block the pump on a slow GUI: drop frames, keep latency
-            // low. Only a closed receiver exits the worker.
-            match sender.try_send(FrameMessage::Frame {
-                width: framebuffer.width,
-                height: framebuffer.height,
-                rgba: framebuffer.rgba.clone(),
-            }) {
-                Ok(()) => {}
-                Err(mpsc::TrySendError::Full(_)) => {
-                    dropped_frames += 1;
-                    tracing::trace!(
-                        dropped_frames,
-                        "dropped video frame; GUI behind, keeping latency low"
-                    );
+            match rfb.poll_incoming()? {
+                raritan_rfb::Incoming::Stashed(update) => {
+                    rfb.request_framebuffer_update(true)?;
+                    if handle(&update, rfb.framebuffer_size())? {
+                        return Ok(());
+                    }
                 }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    info!("video worker: frame receiver closed; exiting");
-                    return Ok(());
+                raritan_rfb::Incoming::Live(header) => {
+                    // Request while the body is still on the wire, like
+                    // Java's `processFramebufferUpdate` (request before
+                    // reading): the server renders the next frame during
+                    // this one's transfer and decode.
+                    rfb.request_framebuffer_update(true)?;
+                    let update = rfb.read_update_body(&header)?;
+                    if handle(&update, rfb.framebuffer_size())? {
+                        return Ok(());
+                    }
                 }
+                raritan_rfb::Incoming::Handled => {}
             }
         }
-    })();
-    for eric in held {
-        let _ = rfb.write_key_event(eric, false);
     }
-    // Release held mouse buttons too.
-    let _ = rfb.write_pointer_event(0, 0, 0, 0);
-    result
-}
 
 /// Writes one GUI command to the target, tracking held keys so they can
 /// be released when the session ends.

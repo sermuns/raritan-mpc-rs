@@ -19,6 +19,25 @@ use raritan_common::{read_i32, read_u8, read_u16, read_u32};
 use std::io::{Read, Write};
 use tracing::{debug, info, trace, warn};
 
+/// Header of a framebuffer update (type byte already consumed).
+#[derive(Debug, Clone, Copy)]
+pub struct UpdateHeader {
+    pub flags: u8,
+    pub count: usize,
+    pub size: usize,
+}
+
+/// Result of [`RfbStream::poll_incoming`]; see its docs.
+#[derive(Debug)]
+pub enum Incoming {
+    /// Update stashed during the handshake (already decoded).
+    Stashed(FramebufferUpdate),
+    /// Live update: header read, body still on the wire.
+    Live(UpdateHeader),
+    /// Non-update message, answered or skipped inline.
+    Handled,
+}
+
 /// Caps so corrupt length words cannot OOM the process.
 const MAX_UPDATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RECT_BYTES: usize = 32 * 1024 * 1024;
@@ -49,39 +68,55 @@ impl<S: Read + Write> RfbStream<S> {
         }
     }
 
-    /// Reads exactly one server message: `Some` for a framebuffer update,
-    /// `None` for anything else (answered or skipped inline). Returning per
-    /// message lets the pump interleave input without a socket timeout that
-    /// could fire mid-message.
-    pub fn read_one_message(&mut self) -> Result<Option<FramebufferUpdate>> {
+    /// A polled server message: a complete stashed update, a live update
+    /// whose body is still on the wire, or a non-update message that was
+    /// answered or skipped inline. Splitting the live header from its body
+    /// lets the caller request the next update while the body transfers,
+    /// like Java's `processFramebufferUpdate` (request first, decode second).
+    pub fn poll_incoming(&mut self) -> Result<Incoming> {
         if let Some(update) = self.pending_updates.pop_front() {
-            return Ok(Some(update));
+            return Ok(Incoming::Stashed(update));
         }
         let message_type = read_u8(&mut self.stream)?;
         trace!(message_type, "received RFB server message");
         match message_type {
-            FRAMEBUFFER_UPDATE => return self.read_framebuffer_update().map(Some),
+            FRAMEBUFFER_UPDATE => self.read_update_header().map(Incoming::Live),
             PING_REQUEST => {
                 let serial = self.read_ping_serial()?;
                 self.write_ping_reply(serial)?;
+                Ok(Incoming::Handled)
             }
             PING_REPLY => {
                 let _ = self.read_ping_serial()?;
+                Ok(Incoming::Handled)
             }
             BANDWIDTH_REQUEST => {
                 // RfbHandler.processBandwidthRequest: reply(1), read, reply(2).
                 self.write_bandwidth_reply(1)?;
                 self.read_bandwidth_request()?;
                 self.write_bandwidth_reply(2)?;
+                Ok(Incoming::Handled)
             }
             SERVER_FB_FORMAT => {
                 let (width, height, _) = self.read_server_fb_format()?;
                 info!(width, height, "framebuffer format changed");
                 self.framebuffer_size = Some((width, height));
+                Ok(Incoming::Handled)
             }
-            _ => self.skip_server_message(message_type)?,
+            _ => self.skip_server_message(message_type).map(|()| Incoming::Handled),
         }
-        Ok(None)
+    }
+
+    /// Reads exactly one server message: `Some` for a framebuffer update,
+    /// `None` for anything else (answered or skipped inline). Returning per
+    /// message lets the pump interleave input without a socket timeout that
+    /// could fire mid-message.
+    pub fn read_one_message(&mut self) -> Result<Option<FramebufferUpdate>> {
+        match self.poll_incoming()? {
+            Incoming::Stashed(update) => Ok(Some(update)),
+            Incoming::Live(header) => self.read_update_body(&header).map(Some),
+            Incoming::Handled => Ok(None),
+        }
     }
 
     fn read_ping_serial(&mut self) -> Result<u32> {
@@ -373,27 +408,46 @@ impl<S: Read + Write> RfbStream<S> {
     }
 
     pub fn read_framebuffer_update(&mut self) -> Result<FramebufferUpdate> {
+        let header = self.read_update_header()?;
+        self.read_update_body(&header)
+    }
+
+    /// Reads an update header (flags, rect count, body size, optional
+    /// timestamp). The body stays on the wire so the caller can pipeline
+    /// the next update request first.
+    pub fn read_update_header(&mut self) -> Result<UpdateHeader> {
         let flags = read_u8(&mut self.stream)?;
         let count = read_u16(&mut self.stream)? as usize;
-        let update_size = read_u32(&mut self.stream)? as usize;
+        let size = read_u32(&mut self.stream)? as usize;
         debug!(
             flags,
             rectangles = count,
-            update_size,
+            update_size = size,
             "received framebuffer update header"
         );
         if count > 4096 {
             bail!("framebuffer update has too many rectangles: {count}");
         }
-        if update_size > MAX_UPDATE_BYTES {
-            bail!("framebuffer update too large: {update_size}");
+        if size > MAX_UPDATE_BYTES {
+            bail!("framebuffer update too large: {size}");
         }
 
         if flags & 1 != 0 {
             let _timestamp_seconds = read_u32(&mut self.stream)?;
             let _timestamp_micros = read_u32(&mut self.stream)?;
         }
+        Ok(UpdateHeader {
+            flags,
+            count,
+            size,
+        })
+    }
 
+    /// Reads and parses the body of a previously read [`UpdateHeader`].
+    pub fn read_update_body(&mut self, header: &UpdateHeader) -> Result<FramebufferUpdate> {
+        let flags = header.flags;
+        let count = header.count;
+        let update_size = header.size;
         let mut encoded = vec![0; update_size];
         self.stream.read_exact(&mut encoded)?;
         let payload = if flags & 4 != 0 {
