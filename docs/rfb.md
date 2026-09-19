@@ -20,7 +20,7 @@ All multi-byte integers are big-endian.
    (`RfbLoginMsgV01_22`: method 16, name `"super"`).
 4. Read `[33][len][challenge?]` (len is 0 in practice).
    Send `[33][total][`"id":"key"` + NUL]` where `"id":"key"` is the
-   `RfbCredentials::rdm_session()` pair and `total` **includes** the NUL
+   `SessionCreds::rdm_session()` pair and `total` **includes** the NUL
    (`RfbChallengeResponseMsgV01_22` + RDM branch of
    `RfbAuthenticatorV01_22`).
 5. Event loop until message `128` (mirrors
@@ -90,10 +90,12 @@ the server start sending frames.
 ## Steady state
 
 - `request_framebuffer_update(true)`: full-area incremental request
-  `[3,1, 0,0, W,H]` sent immediately when each update arrives, before
-  decoding it (mirrors Java `processFramebufferUpdate`, which requests
-  first and decodes second, so the server renders the next frame while
-  the client decodes).
+  `[3,1, 0,0, W,H]`, exactly one outstanding per consumed update. It is
+  sent immediately after each update **header**, before the body is read
+  or decoded (mirrors Java `processFramebufferUpdate`, which requests
+  first and reads second, so the server renders the next frame during
+  transfer + decode). See `RfbStream::poll_incoming` /
+  `read_update_header` / `read_update_body`.
 - `read_message()`: returns the next `FramebufferUpdate`; answers ping
   requests (`[149,0,0,0,serial]`), absorbs ping replies, performs the
   bandwidth handshake (`[151,1]` … read … `[151,2]`), adopts late `128`

@@ -2,7 +2,8 @@
 
 Reference: decompiled `javaclientlib.clientlib` (`TRConnection`,
 `CSCConnect`, `TRVideoStream`) plus decrypted captures. Implementation:
-`raritan-rdm/src/client.rs`, framing in `protocol.rs`.
+`raritan-rdm/src/client.rs`; framing in `raritan-common/src/csc.rs`
+(`read_frame`/`write_frame`).
 
 ## Framing and auth (port 5000)
 
@@ -21,12 +22,19 @@ Reference: decompiled `javaclientlib.clientlib` (`TRConnection`,
 
 - `<Session><GetSessionID/></Session>` → `SessionID` + `SessionKey`.
   The pair (`"id":"key"`) is the RFB credential
-  (`RfbCredentials::rdm_session`); same construction as the Java
-  `RFBProfile.rdmSession`.
+  (`SessionCreds::rdm_session` in `raritan-common`); same construction
+  as the Java `RFBProfile.rdmSession`.
 - `<Database><Get><Select>…` queries enumerate devices/ports. The
   top-level IP-Reach query returns the `Admin` and `*_FG_0` ports; each
   `Connection="D_…"` device is queried for its KVM ports (id, Class,
   Type, index, Status, Name, …).
+- Port numbers: the wire `@index` is **0-indexed**; the UI shows
+  **1-indexed** numbers (`Port::display_index`, `raritan-rdm/src/model.rs`).
+  `find_port` (`raritan-session`) accepts both, plus id, exact name, id
+  suffix, and name substring.
+- Listing/busy: `Port::is_listed` shows `Status` 1|2 only (down ports stay
+  hidden, like Java); `Port::is_busy` combines `@Status` with
+  `@StatAvailable` (1|2 = in use elsewhere, 4 = all channels in use).
 - `open_event_session(session_id, session_key)`: second `:5000`
   connection, `<CSC_Start_Session ProtocolID="RDMEvent"
   SessionID="…"/>`, TLS, then the RC4 `CSC_Test2` dance from

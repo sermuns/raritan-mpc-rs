@@ -18,6 +18,11 @@ RGB565 pixel format, full update request, and the session-init tail).
 plus a real 16×16 LRLE rect: asserts the `[149,…]` reply bytes and that
 all 256 pixels decode (opaque alpha).
 
+`pipelined_header_body_split_matches_single_read` locks the worker's
+pipelining contract: `poll_incoming` exposes the update header while the
+body is unread, the next update request is written in between, and the
+split read decodes exactly what the single read does.
+
 ## Pcap replay (needs capture files)
 
 With `/tmp/truth.pcapng` (Java, Rack 10) a throwaway harness fed the
@@ -77,3 +82,14 @@ Decodes 1024×768 updates to a PPM (viewable after conversion, e.g. with
 Pillow). A Windows lock screen decoded pixel-perfect on the first
 successful run. Target flakiness is real: expect `No video from target
 server` / `video=unstable` / calibration OSDs even in Java captures.
+
+## Steady-state pipelining (live probe)
+
+A throwaway harness drove the exact worker path against a real switch
+(`poll header → request → read body`, Rack 10, 1024×768): 6 consecutive
+updates, including 115–235 KB bodies, decoded with the stream staying
+aligned — mid-update requests don't confuse the switch. Same probe in
+release mode: per-update client CPU ≈ 1.5 ms total (decode + clone +
+convert) on small idle-screen updates, so decode throughput is not the
+bottleneck; input pickup while idle is bounded by the 5 ms poll
+(~3 ms avg on loopback vs ~45 ms avg at 100 ms).

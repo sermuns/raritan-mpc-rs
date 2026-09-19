@@ -18,7 +18,8 @@ device access). No other ports are involved (verified by capture).
    and each connected child device → KVM port list.
 
 Implemented in `raritan-rdm/src/client.rs` (`RdmClient::connect`,
-`enumerate_ports`) with framing in `protocol.rs` (`read_frame`/`write_frame`).
+`enumerate_ports`) with framing in `raritan-common/src/csc.rs`
+(`read_frame`/`write_frame`).
 
 ## Video (port 443, plaintext RFB)
 
@@ -53,6 +54,33 @@ No TR grant is used (see [RDM](rdm.md#the-tr-video-stream-grant)). The flow is:
    closes first, then the RFB stream. A video reconnect asks the control
    thread for credentials again; it verifies the connection with a round
    trip first and logs in afresh if that fails.
+
+## Video worker loop (GUI latency design)
+
+`run_pump` in `raritan-mpc/src/main.rs` is single-threaded: one loop
+owns the RFB `TcpStream` for both directions (simpler than Java's
+UI-thread writes via `synchronized` methods; an input event waits at
+most one body transfer because of the double drain). Per iteration:
+
+- Drain all queued GUI input first (mpsc channel, never dropped), then
+  `wait_for_message` peeks with a **5 ms** timeout so idle input waits
+  at most ~5 ms before reaching the wire (measured ~3 ms avg on
+  loopback; 100 ms polled ~45 ms avg). Input is drained again after the
+  wait, before a (possibly large) update body is read.
+- `poll_incoming`: stashed handshake updates and live update headers
+  are surfaced separately from inline-handled messages (pings, bandwidth
+  handshake, late 128 format changes). The next incremental request goes
+  out at the **header**, before the body transfers and decodes.
+- Decoded frames go over a bounded (`sync_channel(2)`) queue to egui;
+  a full queue **drops** frames (latency over completeness). The GUI
+  uploads only the freshest frame per tick and repaints immediately on
+  arrival (33 ms fallback tick when idle).
+- Every connect releases Eric codes 0–137 (the switch keeps per-target
+  key state; a lost release would stick forever). On exit, held keys and
+  mouse buttons are released the same way.
+- Retries: 4 attempts per port selection with 1/2/4 s backoff; a
+  superseded worker cancels between handshake stages so its TLS
+  handshakes don't slow the new one.
 
 ## What the Java client does differently (and why it doesn't matter)
 

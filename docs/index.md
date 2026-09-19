@@ -19,7 +19,7 @@ A Rust rewrite of the Raritan MPC Java client for Raritan KVM switches
 | `raritan-rdm` | RDM control channel: auth, database queries, event referral session, TR grant diagnostics |
 | `raritan-rfb` | RFB 1.29 video channel: handshake, message pump, framebuffer decode (Raw/LRLE), update requests |
 | `raritan-common` | Shared CSC framing, legacy TLS, XML/RC4 helpers, ports/timeouts |
-| `raritan-session` | End-to-end video flow shared by CLI and GUI (RDM → event → RFB → capture) |
+| `raritan-session` | End-to-end video flow shared by CLI and GUI (RDM → RFB → capture, plus the event session) |
 | `raritan-cli` | Headless CLI: list ports, capture video to PPM, dump inventory XML |
 | `raritan-mpc` | `egui` GUI (default workspace member) |
 

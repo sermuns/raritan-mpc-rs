@@ -14,11 +14,11 @@ binaries land in `~/.cache/cargo/debug/`, not `./target`.
 ## CLI reference
 
 ```bash
-# list ports (index, name, type, id, status)
+# list ports (display number, name, type, id, status)
 raritan-cli HOST [--user U] [--password P]
 
 # headless video capture (PPM)
-raritan-cli HOST --video <index|id|name-substring> [--frames N] [--out F]
+raritan-cli HOST --video <display-number|id|name-substring> [--frames N] [--out F]
 
 # inventory XML dump (top-level + child devices + capabilities)
 raritan-cli HOST --dump-xml FILE
@@ -55,20 +55,21 @@ SSLKEYLOGFILE=/tmp/opencode/ourskeys.log raritan-cli ...
 - `raritan-common/src/` — shared CSC framing (`csc`), legacy TLS 1.0
   (`tls`), XML helpers (`xml`), RC4/base64 (`crypto`), ports/timeouts
   (`net`), big-endian readers (`io`).
-- `raritan-rfb/src/` — `proto` (message types), `creds`, `framebuffer`
-  (Raw decode), `lrle` (tile decoder), `input` (key events + Eric
-  table), `transport` (TCP/TLS setup),
-  `handshake`, `pump` (steady-state messages); `RfbStream` itself in
-  `stream.rs`.
+- `raritan-rfb/src/` — `proto` (message types), `framebuffer` (Raw
+  decode), `lrle` (tile decoder), `input` (key events + Eric table),
+  `transport` (TCP/TLS setup), `handshake`, `pump` (steady-state
+  messages: `poll_incoming` header/body split, skips, ping/bandwidth);
+  `RfbStream` itself in `stream.rs`.
 - `raritan-rdm/src/` — `client.rs` (`RdmClient`), `handshake` (CSC
   pre-TLS + auth), `event` (`CSC_Test2`), `tr` (legacy binary TR grant
-  diagnostics), `model` (port parsing); `protocol` re-exports common.
-- `raritan-session/src/lib.rs` — end-to-end video flow (RDM login →
-  RFB → event session → frame capture) shared by CLI and GUI;
-  `control.rs` is the GUI's single long-lived RDM connection (port
-  enumeration, video credentials, keepalive) served over a channel.
+  diagnostics), `model` (port parsing, display numbers, busy state).
+- `raritan-session/src/lib.rs` — `establish_video` (full login per run,
+  the CLI path) and `connect_video` (RFB on an existing login) plus
+  `find_port`/`capture_frames`; `control.rs` is the GUI's single
+  long-lived RDM connection (port enumeration, video credentials,
+  keepalive) served over a channel.
 - `raritan-cli/src/main.rs` — list/capture/dump commands.
-- `raritan-mpc/src/main.rs` — egui app; video worker calls
-  `raritan-session::establish_video`.
+- `raritan-mpc/src/main.rs` — egui app; the video worker reuses the
+  `ControlLink` login and pumps via `run_pump` (see [Flows](flows.md#video-worker-loop-gui-latency-design)).
 - `decompiled/` — CFR output of the Java client; the protocol reference
   behind `docs/rfb.md` and `docs/rdm.md`.
