@@ -1049,16 +1049,36 @@ impl eframe::App for MpcApp {
                                 self.disconnect_video();
                                 "Disconnected".clone_into(&mut self.connection_status);
                             }
+                            // Restart the video session on this port (same
+                            // path as re-clicking it in the sidebar).
+                            if ui
+                                .button("↻ Reconnect")
+                                .on_hover_text("Restart the video session on this port")
+                                .clicked()
+                                && let Some(port) = self.ports.get(index).cloned()
+                            {
+                                self.start_video(&port);
+                            }
                             if ui.button("⌨ Ctrl+Alt+Del").clicked() {
                                 self.confirm_cad = true;
                             }
                             // Manual video actions, mirroring the Java client
                             // (setting 18 = auto-sense, 19 = calibration).
-                            for (label, setting, waiting) in [
-                                ("◎ Auto sense", 18, "Auto-sensing video…"),
-                                ("🎨 Calibrate color", 19, "Calibrating color…"),
+                            for (label, setting, waiting, hover) in [
+                                (
+                                    "◎ Auto-adjust video",
+                                    18,
+                                    "Auto-sensing video…",
+                                    "Re-detect the target's video signal and tune sampling",
+                                ),
+                                (
+                                    "🎨 Calibrate color",
+                                    19,
+                                    "Calibrating color…",
+                                    "Re-tune the color gains and offsets",
+                                ),
                             ] {
-                                if ui.button(label).clicked()
+                                if ui.button(label).on_hover_text(hover).clicked()
                                     && let Some(tx) = &self.cmd_tx
                                 {
                                     let _ =
