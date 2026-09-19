@@ -94,8 +94,9 @@ fn main() -> color_eyre::Result<()> {
         user: args.user.clone(),
         password: args.password.clone(),
     };
-    let mut rfb = establish_video(&config, &port_id)?;
-    let (framebuffer, seen_encodings, total_rects) = capture_frames(&mut rfb, args.frames)?;
+    // `session` holds the RDM control connection open for the capture.
+    let mut session = establish_video(&config, &port_id)?;
+    let (framebuffer, seen_encodings, total_rects) = capture_frames(&mut session.rfb, args.frames)?;
     info!(?seen_encodings, total_rects, "capture finished");
 
     std::fs::write(&args.out, encode_ppm(&framebuffer))?;

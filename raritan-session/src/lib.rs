@@ -1,10 +1,10 @@
 //! End-to-end video session orchestration shared by the CLI and GUI:
 //! RDM login → credentials → best-effort event session → RFB handshake → pump.
 
-use eyre::OptionExt;
+use eyre::{OptionExt, WrapErr};
 use raritan_rdm::{Port, RdmClient};
 use raritan_rfb::{Framebuffer, PixelFormat, RfbStream};
-use std::net::TcpStream;
+use std::{net::TcpStream, time::Duration};
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
@@ -47,12 +47,46 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
     }
 }
 
+/// A live video session. The RDM control connection must outlive the
+/// video: the switch reaps the session (event socket first, then RFB)
+/// once its owner disconnects or idles; see [`VideoSession::keepalive`].
+pub struct VideoSession {
+    pub rdm: RdmClient,
+    pub rfb: RfbStream<TcpStream>,
+    last_rdm_keepalive: std::time::Instant,
+    last_rfb_ping: std::time::Instant,
+    rfb_ping_serial: u32,
+}
+
+/// Java `TRKeepAliveThread`: 58 s "not responding" limit, ping at half.
+pub const RDM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(29);
+/// Java `PingTimer`: RFB ping request every 20 s.
+pub const RFB_PING_INTERVAL: Duration = Duration::from_secs(20);
+
+impl VideoSession {
+    /// Sends whichever keepalives are due; call from the pump loop at
+    /// least every few seconds. Errors mean the session is going away.
+    pub fn keepalive(&mut self) -> eyre::Result<()> {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_rfb_ping) >= RFB_PING_INTERVAL {
+            self.rfb_ping_serial = self.rfb_ping_serial.wrapping_add(1);
+            debug!(serial = self.rfb_ping_serial, "sending RFB ping request");
+            self.rfb
+                .write_ping_request(self.rfb_ping_serial)
+                .wrap_err("RFB ping request")?;
+            self.last_rfb_ping = now;
+        }
+        if now.duration_since(self.last_rdm_keepalive) >= RDM_KEEPALIVE_INTERVAL {
+            self.rdm.keepalive().wrap_err("RDM keepalive")?;
+            self.last_rdm_keepalive = now;
+        }
+        Ok(())
+    }
+}
+
 /// Opens the full video path (RDM → credentials → event session → RFB).
 /// The TR grant (cmd 55) is skipped — the switch never answers it.
-pub fn establish_video(
-    config: &ConnectionConfig,
-    port_id: &str,
-) -> eyre::Result<RfbStream<TcpStream>> {
+pub fn establish_video(config: &ConnectionConfig, port_id: &str) -> eyre::Result<VideoSession> {
     info!(%port_id, "connecting RDM video session");
     let started = std::time::Instant::now();
     // Only credentials are needed here, not the inventory.
@@ -92,7 +126,14 @@ pub fn establish_video(
         elapsed_ms = started.elapsed().as_millis(),
         "cleared stuck keys"
     );
-    Ok(rfb)
+    let now = std::time::Instant::now();
+    Ok(VideoSession {
+        rdm,
+        rfb,
+        last_rdm_keepalive: now,
+        last_rfb_ping: now,
+        rfb_ping_serial: 0,
+    })
 }
 
 /// Reads `n` framebuffer updates into a fresh RGB565 framebuffer.

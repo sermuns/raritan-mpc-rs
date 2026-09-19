@@ -16,6 +16,9 @@ use tracing::{debug, info};
 
 const SELECT_IP_REACH_PORTS: &str = "<Database><Get><Select>/System/Device[@Type='IP-Reach']/Port</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>";
 const SELECT_SESSION_ID: &str = "<Session><GetSessionID/></Session>";
+/// Java `TRConnection.GET_DEVICE_ID`: the cheap query its event loop
+/// sends to keep the control session alive.
+const SELECT_DEVICE_ID: &str = "<Database><Get><Select>/System/Device</Select><Nodes> Device </Nodes><SubNodes> Name SerialNo @id</SubNodes></Get></Database>";
 
 fn select_device(device_id: &str) -> String {
     format!(
@@ -98,6 +101,16 @@ impl RdmClient {
         Ok(String::from_utf8(response)?
             .trim_end_matches('\0')
             .to_owned())
+    }
+
+    /// Session keepalive: the switch reaps idle sessions (event socket
+    /// first, then RFB), so the Java client polls `GET_DEVICE_ID` from
+    /// its event loop and TR-pings from `TRKeepAliveThread`. The TR layer
+    /// is silent on current firmware, so only the query is sent.
+    pub fn keepalive(&mut self) -> eyre::Result<()> {
+        let response = self.database_query(SELECT_DEVICE_ID)?;
+        debug!(length = response.len(), "RDM keepalive answered");
+        Ok(())
     }
 
     /// Raw XML of the top-level IP-Reach port inventory (debugging aid).
