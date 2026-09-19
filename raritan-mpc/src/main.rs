@@ -1032,9 +1032,11 @@ impl eframe::App for MpcApp {
                                 );
                             });
                     });
-                    if self.port_refresh.is_some() {
-                        ui.spinner();
-                    }
+                    // The spinner stays mounted (invisible when idle) so the
+                    // rows below never jump when a refresh starts or stops.
+                    ui.horizontal(|ui| {
+                        ui.add_visible(self.port_refresh.is_some(), egui::Spinner::new());
+                    });
                     // Footer as a nested bottom panel so it reserves only its own height.
                     egui::Panel::bottom("version").show(ui, |ui| {
                         ui.small(format!("v{} · {}", env!("CARGO_PKG_VERSION"), short_sha()));
@@ -1056,24 +1058,37 @@ impl eframe::App for MpcApp {
                                         // take `&mut self`, so no `self.ports`
                                         // borrow may reach into them.
                                         let port = &self.ports[index];
-                                        let label = format!(
-                                            "{}  {}",
-                                            port.index.map_or_else(
-                                                || "?".to_owned(),
-                                                |value| value.to_string()
-                                            ),
-                                            port.name.as_deref().unwrap_or(&port.id),
-                                        );
+                                        let name =
+                                            port.name.as_deref().unwrap_or(&port.id).to_owned();
+                                        let label = if port.is_busy() {
+                                            format!(
+                                                "{}  👥 {name} (in use)",
+                                                port.index.map_or_else(
+                                                    || "?".to_owned(),
+                                                    |value| value.to_string()
+                                                ),
+                                            )
+                                        } else {
+                                            format!(
+                                                "{}  {}",
+                                                port.index.map_or_else(
+                                                    || "?".to_owned(),
+                                                    |value| value.to_string()
+                                                ),
+                                                name,
+                                            )
+                                        };
                                         let selected = self.selected_port == Some(index);
                                         let selected_port = port.clone();
-                                        let busy = port.is_busy();
-                                        // Busy ports stay clickable; the suffix +
-                                        // tooltip show they are in use elsewhere.
-                                        let label = if busy {
-                                            format!("{label} (busy)")
-                                        } else {
-                                            label
-                                        };
+                                        // In-use ports stay clickable; the 👥 marker,
+                                        // suffix, and tooltip show someone is on them.
+                                        let busy_tip = port.busy_tooltip();
+                                        // In-use rows get the theme's warning color.
+                                        let warn = ui.visuals().warn_fg_color;
+                                        let mut text = egui::RichText::new(label);
+                                        if busy_tip.is_some() {
+                                            text = text.color(warn);
+                                        }
                                         let stripe = if row % 2 == 1 {
                                             ui.visuals().faint_bg_color
                                         } else {
@@ -1084,11 +1099,9 @@ impl eframe::App for MpcApp {
                                                 egui::Layout::top_down_justified(egui::Align::LEFT),
                                                 |ui| {
                                                     let mut response =
-                                                        ui.selectable_label(selected, label);
-                                                    if busy {
-                                                        response = response.on_hover_text(
-                                                            "Busy — in use by another user",
-                                                        );
+                                                        ui.selectable_label(selected, text);
+                                                    if let Some(tip) = busy_tip {
+                                                        response = response.on_hover_text(tip);
                                                     }
                                                     if response.clicked() {
                                                         self.selected_port = Some(index);

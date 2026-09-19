@@ -13,8 +13,8 @@ pub struct Port {
     pub r#type: Option<String>,
     #[serde(rename = "@index", default)]
     pub index: Option<i32>,
-    /// Switch status: 0 = unavailable, 1 = available, 2 = busy
-    /// (the Java client's "Busy" tooltip: in use by someone else).
+    /// Switch status (0 = down, 1 = up, 2 = busy); the real state combines
+    /// this with `@StatAvailable` — see [`Port::is_busy`].
     #[serde(rename = "@Status", default)]
     pub status: Option<i32>,
     #[serde(rename = "@StatAvailable", default)]
@@ -39,7 +39,18 @@ impl Port {
 
     /// Busy (status 2): connected elsewhere, shown with a marker.
     pub fn is_busy(&self) -> bool {
-        self.status == Some(2)
+        self.busy_tooltip().is_some()
+    }
+    /// Occupied marker, mirroring Java's availability states, which combine
+    /// `@Status` with `@StatAvailable`. `None` when free.
+    pub fn busy_tooltip(&self) -> Option<&'static str> {
+        match self.stat_available {
+            Some(1 | 2) => Some("Someone else is connected to this port"),
+            Some(4) => Some("All channels are in use"),
+            // No StatAvailable: raw status stands alone (legacy path).
+            _ if self.status == Some(2) => Some("Someone else is connected to this port"),
+            _ => None,
+        }
     }
 }
 
@@ -167,7 +178,7 @@ mod tests {
     #[test]
     fn busy_ports_are_listed_and_flagged() {
         let ports = parse_ports(
-            r#"<Database><Get><Data><Device id="D_1"><Port id="P_5" Class="KVM" index="5" Status="1"><Name>IDLE-BOX</Name></Port><Port id="P_6" Class="KVM" index="6" Status="2"><Name>LAILA-W14</Name></Port><Port id="P_7" Class="KVM" index="7" Status="0"><Name>OFFLINE-BOX</Name></Port></Device></Data></Get></Database>"#,
+            r#"<Database><Get><Data><Device id="D_1"><Port id="P_5" Class="KVM" index="5" Status="1" StatAvailable="0"><Name>IDLE-BOX</Name></Port><Port id="P_7" Class="KVM" index="7" Status="1" StatAvailable="2"><Name>LAILA-W14</Name></Port><Port id="P_8" Class="KVM" index="8" Status="1" StatAvailable="1"><Name>SHARED-BOX</Name></Port><Port id="P_9" Class="KVM" index="9" Status="1" StatAvailable="4"><Name>FULL-BOX</Name></Port><Port id="P_10" Class="KVM" index="10" Status="1" StatAvailable="3"><Name>DOWN-BOX</Name></Port><Port id="P_11" Class="KVM" index="11" Status="0" StatAvailable="2"><Name>DEAD-BOX</Name></Port><Port id="P_12" Class="KVM" index="12" Status="2"><Name>LEGACY-BOX</Name></Port></Device></Data></Get></Database>"#,
         )
         .unwrap();
         let listed: Vec<&str> = ports
@@ -175,10 +186,23 @@ mod tests {
             .filter(|port| port.is_listed())
             .map(|port| port.id.as_str())
             .collect();
-        assert_eq!(listed, ["P_5", "P_6"]);
-        let laila = ports.iter().find(|port| port.id == "P_6").unwrap();
-        assert_eq!(laila.index, Some(6));
+        assert_eq!(listed, ["P_5", "P_7", "P_8", "P_9", "P_10", "P_12"]);
+        let laila = ports.iter().find(|port| port.id == "P_7").unwrap();
+        assert_eq!(laila.index, Some(7));
         assert!(laila.is_busy());
+        assert_eq!(
+            laila.busy_tooltip(),
+            Some("Someone else is connected to this port")
+        );
         assert!(!ports[0].is_busy());
+        assert_eq!(ports[0].busy_tooltip(), None);
+        // Down ports stay hidden even with a busy-looking StatAvailable.
+        assert!(
+            !ports
+                .iter()
+                .find(|port| port.id == "P_11")
+                .unwrap()
+                .is_listed()
+        );
     }
 }
