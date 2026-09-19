@@ -60,7 +60,7 @@ pub const SET_CONNECTION_PARAMETER: u8 = 155;
 pub const AUTH_METHOD_RDM_SESSION: u8 = 16;
 
 /// Default encoding set, exactly as the Java client sends
-/// (HW/UNCOMPRESSED/COLOR_16_BIT → `0x1080` + three zero slots).
+/// (`HW`/`UNCOMPRESSED`/`COLOR_16_BIT` → `0x1080` + three zero slots).
 pub fn default_encodings() -> [u32; 4] {
     [0x0000_1080, 0, 0, 0]
 }

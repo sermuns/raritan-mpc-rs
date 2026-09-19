@@ -1,4 +1,4 @@
-//! `CSC_Test2` challenge/response for the RDMEvent session, mirroring
+//! `CSC_Test2` challenge/response for the `RDMEvent` session, mirroring
 //! `CSCConnect.CSC_Test`: the server sends a base64 `ClearText` challenge,
 //! we RC4 it with the session key plus a time-XORed probe; the server
 //! echoes our probe back encrypted.

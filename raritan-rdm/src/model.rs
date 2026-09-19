@@ -104,6 +104,8 @@ pub(crate) struct SessionResponse {
 }
 
 #[derive(Debug, Deserialize)]
+// Field names follow the XML (`SessionID` vs `SessionID` element).
+#[allow(clippy::struct_field_names)]
 pub(crate) struct SessionData {
     #[serde(rename = "@SessionID", default)]
     pub session_id: Option<String>,

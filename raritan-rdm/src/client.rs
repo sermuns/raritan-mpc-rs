@@ -177,7 +177,7 @@ impl RdmClient {
         ))
     }
 
-    /// Opens the RDMEvent referral session the Java client holds while
+    /// Opens the `RDMEvent` referral session the Java client holds while
     /// connecting video: `:5000` → `StartSession(RDMEvent)` → TLS → RC4
     /// `CSC_Test2`. Drained in the background like Java's event loop.
     pub fn open_event_session(&self, session_id: &str, session_key: &str) -> eyre::Result<()> {

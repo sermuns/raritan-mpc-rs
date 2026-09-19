@@ -30,3 +30,13 @@ raritan-session = { path = "raritan-session" }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Boilerplate for eyre-style error handling: every fallible helper returns
+# `eyre::Result`, so per-function `# Errors` sections would add no information.
+missing_errors_doc = "allow"
+# Trivial getters/converters in workspace-internal crates.
+must_use_candidate = "allow"
+# Wire parsing with explicit length/range checks; `try_into` everywhere would
+# drown the protocol logic for no added safety.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"

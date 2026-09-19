@@ -7,7 +7,7 @@
 //! `[5, buttons, x:u16-be, y:u16-be, wheel:u16-be]` with the standard RFB
 //! button mask; wheel-only events carry `x = y = 0` (also verified by capture).
 //!
-//! Eric codes are Raritan's own numbering (`KeyTranslatorBase.addKeys`, en_US),
+//! Eric codes are Raritan's own numbering (`KeyTranslatorBase.addKeys`, `en_US`),
 //! keyed by Java key code + location (1 = standard, 2 = left, 3 = right, 4 = numpad).
 
 use crate::{
@@ -95,7 +95,9 @@ pub fn eric_code(java_code: i32, location: i32) -> Option<u16> {
     None
 }
 
-#[allow(clippy::too_many_lines)]
+// Lookup table mirroring the Java key map: one arm per entry, so identical
+// bodies are expected rather than merged.
+#[allow(clippy::too_many_lines, clippy::match_same_arms)]
 fn eric_by_code(java_code: i32, location: i32) -> Option<u16> {
     let eric = match (java_code, location) {
         // Top row (backquote … equals) + editing keys.
@@ -332,7 +334,7 @@ mod tests {
         for chunk in bytes.as_chunks::<4>().0 {
             assert_eq!(chunk[0], 4);
             assert_eq!(chunk[1], 0);
-            assert!(chunk[2] & 0x80 == 0);
+            assert_eq!(chunk[2] & 0x80, 0);
         }
     }
 

@@ -8,7 +8,7 @@ pub fn xml_attribute(xml: &str, name: &str) -> Option<String> {
     Some(xml[start..end].to_owned())
 }
 
-/// XML-escapes a value for CSC requests (via quick_xml, the single implementation).
+/// XML-escapes a value for CSC requests (via `quick_xml`, the single implementation).
 pub fn escape_xml(value: &str) -> String {
     quick_xml::escape::escape(value).into_owned()
 }

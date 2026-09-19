@@ -20,7 +20,7 @@ pub fn decode_base64(value: &str) -> Result<Vec<u8>> {
         .wrap_err("invalid base64 in CSC_Test2 exchange")
 }
 
-/// Time-XORed probe, mirroring `CSCConnect.CSC_Test`: each byte is XORed
+/// Time-XORed probe, mirroring `CSCConnect.CSC_Test`: each byte is `XORed`
 /// with a re-sampled, shifting millisecond clock.
 pub fn time_xored_probe(probe: &[u8]) -> Vec<u8> {
     let mut clear = Vec::with_capacity(probe.len());
@@ -41,8 +41,7 @@ pub fn current_time_millis() -> i32 {
     // 32-bit millisecond clock like Java's `int` (wraps ~24 days); pre-epoch yields 0.
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64 as i32)
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_millis() as u64 as i32)
 }
 
 /// One-shot RC4 for the `CSC_Test2` challenge/response.

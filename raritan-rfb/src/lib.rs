@@ -45,6 +45,9 @@ mod tests {
 
     /// Type 1 (palettized reboot screens) must not kill the pump:
     /// skipped, with the next update still parsing.
+    // `assert!(.is_empty())` reads better here than the lint's
+    // `assert_eq!(.., [] as [..; 0])` suggestion.
+    #[allow(clippy::assert_is_empty)]
     #[test]
     fn pump_survives_colour_map() {
         let mut server = vec![1, 0]; // type 1 + pad

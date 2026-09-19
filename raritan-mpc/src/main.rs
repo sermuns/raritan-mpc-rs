@@ -46,9 +46,10 @@ fn main() -> eframe::Result {
     info!("starting Raritan MPC");
     let args = Args::parse();
     let mut viewport = egui::ViewportBuilder::default();
-    match load_app_icon() {
-        Some(icon) => viewport = viewport.with_icon(icon),
-        None => warn!("embedded app icon is unreadable; using toolkit default"),
+    if let Some(icon) = load_app_icon() {
+        viewport = viewport.with_icon(icon);
+    } else {
+        warn!("embedded app icon is unreadable; using toolkit default");
     }
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
@@ -219,7 +220,7 @@ impl MpcApp {
         self.cmd_tx = Some(cmd_sender);
         self.clear_frame_state();
         self.error = None;
-        self.connection_status = "Starting framebuffer worker".to_owned();
+        "Starting framebuffer worker".clone_into(&mut self.connection_status);
         // Snapshot connection values; later UI edits apply to the next session.
         let host = self.host.clone();
         let user = self.user.clone();
@@ -283,7 +284,7 @@ impl MpcApp {
         info!(host = %self.host, "refreshing port list");
         let (sender, receiver) = mpsc::channel();
         self.port_refresh = Some(receiver);
-        self.connection_status = "Refreshing ports".to_owned();
+        "Refreshing ports".clone_into(&mut self.connection_status);
         self.error = None;
         let host = self.host.clone();
         let user = self.user.clone();
@@ -304,7 +305,7 @@ impl MpcApp {
         self.disconnect_video();
         self.ports.clear();
         self.switch_info = None;
-        self.connection_status = "Disconnected".to_owned();
+        "Disconnected".clone_into(&mut self.connection_status);
     }
 
     /// Applies a finished refresh, keeping the selection if possible.
@@ -321,12 +322,12 @@ impl MpcApp {
                 self.switch_info = Some(switch_info);
                 self.selected_port =
                     selected_id.and_then(|id| self.ports.iter().position(|port| port.id == id));
-                self.connection_status = "Ready".to_owned();
+                "Ready".clone_into(&mut self.connection_status);
             }
             Err(error) => {
                 warn!(%error, "port list refresh failed");
                 self.error = Some(error);
-                self.connection_status = "Port refresh failed".to_owned();
+                "Port refresh failed".clone_into(&mut self.connection_status);
             }
         }
     }
@@ -373,10 +374,10 @@ impl MpcApp {
             hover.and_then(|pos| self.viewport.and_then(|rect| map_pointer(rect, size, pos)));
         let fallback = self.last_pointer.map(|(_, x, y)| (x, y)).or(Some((0, 0)));
         // Plain moves only go out when the position actually changed.
-        let target: Option<(u16, u16)> = if !button_changes.is_empty() {
-            mapped.or(fallback)
-        } else {
+        let target: Option<(u16, u16)> = if button_changes.is_empty() {
             mapped.filter(|&(x, y)| self.last_pointer != Some((buttons, x, y)))
+        } else {
+            mapped.or(fallback)
         };
         if let Some((x, y)) = target {
             commands.push(VideoCommand::Pointer {
@@ -583,7 +584,7 @@ fn map_pointer(viewport: egui::Rect, size: (u16, u16), pos: egui::Pos2) -> Optio
     ))
 }
 
-/// Ctrl+Alt+Delete via the en_US Eric table: presses in order, releases reversed.
+/// Ctrl+Alt+Delete via the `en_US` Eric table: presses in order, releases reversed.
 fn cad_sequence() -> Vec<VideoCommand> {
     let held: Vec<u16> = [(17, 2), (18, 2), (127, 1)]
         .into_iter()
@@ -782,6 +783,8 @@ impl eframe::App for MpcApp {
         );
     }
 
+    // Single `ui()` owns the whole frame: sidebar, top bar, and video area.
+    #[allow(clippy::too_many_lines)]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(receiver) = &self.frames {
             // Upload only the freshest frame; skipped uploads never display.
@@ -894,8 +897,8 @@ impl eframe::App for MpcApp {
                         .changed()
                         && !self.custom_credentials
                     {
-                        self.user = DEFAULT_USER.to_owned();
-                        self.password = DEFAULT_PASSWORD.to_owned();
+                        DEFAULT_USER.clone_into(&mut self.user);
+                        DEFAULT_PASSWORD.clone_into(&mut self.password);
                     }
                     ui.add_enabled(
                         self.custom_credentials,
@@ -1002,7 +1005,8 @@ impl eframe::App for MpcApp {
                                             self.start_video(&selected_port);
                                             // Drop focus so Space/Enter go to the KVM
                                             // target instead of re-activating this label.
-                                            if let Some(id) = ui.ctx().memory(|mem| mem.focused()) {
+                                            if let Some(id) = ui.ctx().memory(egui::Memory::focused)
+                                            {
                                                 ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
                                             }
                                         }
@@ -1039,7 +1043,7 @@ impl eframe::App for MpcApp {
                                     if ui.button("× Disconnect").clicked() {
                                         // Drop our channel ends; the worker exits on its next failed send.
                                         self.disconnect_video();
-                                        self.connection_status = "Disconnected".to_owned();
+                                        "Disconnected".clone_into(&mut self.connection_status);
                                     }
                                     if ui.button("⌨ Ctrl+Alt+Del").clicked() {
                                         self.confirm_cad = true;

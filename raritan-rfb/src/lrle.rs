@@ -48,7 +48,7 @@ fn lrle_greys(grey_depth: usize) -> Vec<u32> {
                 4 => n * 17,
                 5 => n * 33 / 4,
                 6 => n * 65 / 16,
-                _ => 0xff00ff,
+                _ => 0xff_00_ff,
             };
             0xff00_0000 | channel << 16 | channel << 8 | channel
         })
@@ -307,7 +307,7 @@ fn decode_lrle_map(
 mod tests {
     use super::*;
 
-    /// 6 px wide, grey_depth 2: one full 4-pixel group plus a 2-pixel
+    /// 6 px wide, `grey_depth` 2: one full 4-pixel group plus a 2-pixel
     /// tail chunk in the low bits, both MSB first.
     #[test]
     fn map_path_handles_remainder_chunk() {

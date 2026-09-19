@@ -174,11 +174,13 @@ impl<S: Read + Write> RfbStream<S> {
     /// Discard a non-video server message, keeping the stream aligned.
     /// Unlike the Java `process*` readers (which throw on type 1), type 1 is
     /// survived: palettized reboot screens must not kill a true-color session.
+    // Message-dispatch match: splitting it per message type would scatter the table.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn skip_server_message(&mut self, message_type: u8) -> Result<()> {
         trace!(message_type, "skipping RFB server message");
         match message_type {
             FIX_COLOUR_MAP => self.skip_colour_map()?,
-            USER_NOTIFICATION => {
+            USER_NOTIFICATION | VM_MOUNTS_RESPONSE => {
                 let mut rest = [0; 7];
                 self.stream.read_exact(&mut rest)?;
             }
@@ -257,10 +259,6 @@ impl<S: Read + Write> RfbStream<S> {
                     value = %String::from_utf8_lossy(&value),
                     "server command"
                 );
-            }
-            VM_MOUNTS_RESPONSE => {
-                let mut rest = [0; 7];
-                self.stream.read_exact(&mut rest)?;
             }
             VM_SHARE_TABLE => {
                 let count = read_u8(&mut self.stream)? as usize;
@@ -397,12 +395,12 @@ impl<S: Read + Write> RfbStream<S> {
                 .saturating_add(1024 * 1024)
                 .min(MAX_UPDATE_BYTES + 1024 * 1024);
             let decoder = ZlibDecoder::new(encoded.as_slice());
-            let mut decoded = Vec::new();
-            decoder.take(limit as u64).read_to_end(&mut decoded)?;
-            if decoded.len() >= limit {
+            let mut inflated = Vec::new();
+            decoder.take(limit as u64).read_to_end(&mut inflated)?;
+            if inflated.len() >= limit {
                 bail!("zlib framebuffer payload exceeds limit ({limit} bytes)");
             }
-            decoded
+            inflated
         } else {
             encoded
         };

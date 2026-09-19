@@ -82,6 +82,11 @@ impl Framebuffer {
         })
     }
 
+    /// Like [`Self::try_new`], but panics instead of erroring.
+    ///
+    /// # Panics
+    ///
+    /// Panics on zero dimensions or an over-cap buffer.
     pub fn new(width: u16, height: u16) -> Self {
         Self::try_new(width, height).expect("framebuffer dimensions too large")
     }
@@ -95,7 +100,7 @@ impl Framebuffer {
             match (rectangle.encoding as u32 & ENCODING_MASK) as u8 {
                 ENCODING_RAW => self.decode_raw(rectangle, pixel_format)?,
                 ENCODING_LRLE_SOFT | ENCODING_LRLE_HARD | ENCODING_AUTO_HW => {
-                    decode_lrle_rect(self, rectangle, pixel_format)?
+                    decode_lrle_rect(self, rectangle, pixel_format)?;
                 }
                 encoding => bail!("unsupported framebuffer encoding {encoding}"),
             }
@@ -149,11 +154,13 @@ impl Framebuffer {
             return;
         }
         let offset = (y * self.width as usize + x) * 4;
-        let [a, r, g, b] = color.to_be_bytes();
-        self.rgba[offset..offset + 4].copy_from_slice(&[r, g, b, a]);
+        let [alpha, red, green, blue] = color.to_be_bytes();
+        self.rgba[offset..offset + 4].copy_from_slice(&[red, green, blue, alpha]);
     }
 }
 
+// Short channel names suit the bit-twiddling below.
+#[allow(clippy::many_single_char_names)]
 pub fn rgb(value: u32, format: PixelFormat) -> u32 {
     let red = ((value >> format.red_shift) & u32::from(format.red_max)) * 255
         / u32::from(format.red_max.max(1));

@@ -69,8 +69,7 @@ fn main() -> color_eyre::Result<()> {
     for port in &ports {
         let index = port
             .index
-            .map(|index| index.to_string())
-            .unwrap_or_else(|| "-".to_owned());
+            .map_or_else(|| "-".to_owned(), |index| index.to_string());
         println!(
             "{:>3} {:<28} {:<12} id={:?} status={:?} available={:?}",
             index,
@@ -113,7 +112,9 @@ fn dump_inventory_xml(client: &mut RdmClient, path: &str) -> color_eyre::Result<
         "<Database><Get><Select>/System/Device[@Type='IP-Reach']/DeviceCapabilities</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>",
         "<Database><Get><Select>/System/Device</Select><Nodes> Device </Nodes><SubNodes> Name SerialNo @id @Type @Model @BM @BaseDevice @CalibrationSpeed @ProductCode</SubNodes></Get></Database>",
     ] {
-        xml.push_str(&format!("\n<!-- {query} -->\n"));
+        xml.push_str("\n<!-- ");
+        xml.push_str(query);
+        xml.push_str(" -->\n");
         xml.push_str(&client.database_query(query)?);
     }
     std::fs::write(path, xml)?;
