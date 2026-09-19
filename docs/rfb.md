@@ -90,7 +90,10 @@ the server start sending frames.
 ## Steady state
 
 - `request_framebuffer_update(true)`: full-area incremental request
-  `[3,1, 0,0, W,H]` after every decoded update.
+  `[3,1, 0,0, W,H]` sent immediately when each update arrives, before
+  decoding it (mirrors Java `processFramebufferUpdate`, which requests
+  first and decodes second, so the server renders the next frame while
+  the client decodes).
 - `read_message()`: returns the next `FramebufferUpdate`; answers ping
   requests (`[149,0,0,0,serial]`), absorbs ping replies, performs the
   bandwidth handshake (`[151,1]` … read … `[151,2]`), adopts late `128`

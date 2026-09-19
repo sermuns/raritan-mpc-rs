@@ -79,7 +79,11 @@ fn load_persisted(storage: Option<&dyn eframe::Storage>) -> PersistedState {
 /// Video session attempts per port selection (initial try + backoff retries).
 const MAX_VIDEO_ATTEMPTS: u32 = 4;
 /// How often the pump checks for queued input while the switch is idle.
-const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Short (the Java client writes input straight from its event thread with
+/// no queue at all): every keypress/mouse event otherwise waits up to this
+/// long in the command channel before reaching the wire. Measured pickup
+/// delay on loopback: ~45 ms avg at 100 ms, ~3 ms avg at 5 ms.
+const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// Longest stall tolerated inside one RFB message before the session is
 /// treated as dead (the Java TR socket uses 174 s).
 const RFB_BODY_TIMEOUT: Duration = Duration::from_mins(1);
@@ -585,29 +589,44 @@ fn run_video_session(
     let mut dropped_frames: u64 = 0;
     let mut pinger = RfbPinger::new();
     let result = (|| -> eyre::Result<()> {
+        // Drains queued input to the switch; true when the GUI went away.
+        // Every event goes through, never dropped.
+        let mut drain = |rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>| -> eyre::Result<bool> {
+            loop {
+                match cmd_receiver.try_recv() {
+                    Ok(command) => send_command(rfb, command, &mut held)?,
+                    Err(mpsc::TryRecvError::Empty) => return Ok(false),
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        // GUI dropped cmd_tx: exit instead of idling forever.
+                        info!("video worker: command channel closed; exiting");
+                        return Ok(true);
+                    }
+                }
+            }
+        };
         loop {
             // Keeps the video channel alive (Java `PingTimer`); the control
             // thread keeps the RDM session alive.
             pinger.tick(rfb)?;
-            // Drain all queued input first; every event goes through, never dropped.
-            loop {
-                match cmd_receiver.try_recv() {
-                    Ok(command) => send_command(rfb, command, &mut held)?,
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        // GUI dropped cmd_tx: exit instead of idling forever.
-                        info!("video worker: command channel closed; exiting");
-                        return Ok(());
-                    }
-                }
+            if drain(rfb)? {
+                return Ok(());
             }
             // Idle poll: loop back to flush input and observe channel closes.
             if !rfb.wait_for_message(INPUT_POLL_INTERVAL)? {
                 continue;
             }
+            // Input that arrived during the wait goes out before blocking
+            // on the (possibly large) update body.
+            if drain(rfb)? {
+                return Ok(());
+            }
             let Some(update) = rfb.read_one_message()? else {
                 continue;
             };
+            // Pipeline the next request before decoding, like Java's
+            // `processFramebufferUpdate` (request first, then decode): the
+            // server renders the next frame while this one decodes.
+            rfb.request_framebuffer_update(true)?;
             // Late 128 format changes resize the stream: recreate the pixel
             // buffer or rects clip and misalign.
             if let Some((width, height)) = rfb.framebuffer_size()
@@ -642,7 +661,6 @@ fn run_video_session(
                     return Ok(());
                 }
             }
-            rfb.request_framebuffer_update(true)?;
         }
     })();
     for eric in held {
@@ -955,6 +973,10 @@ impl eframe::App for MpcApp {
                         egui::TextureOptions::LINEAR,
                     ));
                 }
+                // A frame arrived: repaint immediately so the next one is
+                // picked up without waiting for the fallback tick below.
+                // Idle (no frames) falls back to the 33 ms tick, no spin.
+                ui.ctx().request_repaint();
             }
         }
         ui.ctx()
