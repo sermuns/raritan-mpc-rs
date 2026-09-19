@@ -980,10 +980,17 @@ impl eframe::App for MpcApp {
                         .auto_shrink(false)
                         .show(ui, |ui| {
                             // Justified: every port row spans the full list width.
+                            // Each row gets a zero-margin frame so odd rows can
+                            // carry the stripe background (same shade and parity
+                            // as `egui::Grid::striped`); the frame paints behind
+                            // its content, so selection/hover stay on top.
                             ui.with_layout(
                                 egui::Layout::top_down_justified(egui::Align::LEFT),
                                 |ui| {
-                                    for index in order {
+                                    for (row, index) in order.into_iter().enumerate() {
+                                        // Owned copies up front: the closures below
+                                        // take `&mut self`, so no `self.ports`
+                                        // borrow may reach into them.
                                         let port = &self.ports[index];
                                         let label = format!(
                                             "{}  {}",
@@ -993,23 +1000,36 @@ impl eframe::App for MpcApp {
                                             ),
                                             port.name.as_deref().unwrap_or(&port.id),
                                         );
-                                        if ui
-                                            .selectable_label(
-                                                self.selected_port == Some(index),
-                                                label,
-                                            )
-                                            .clicked()
-                                        {
-                                            self.selected_port = Some(index);
-                                            let selected_port = port.clone();
-                                            self.start_video(&selected_port);
-                                            // Drop focus so Space/Enter go to the KVM
-                                            // target instead of re-activating this label.
-                                            if let Some(id) = ui.ctx().memory(egui::Memory::focused)
-                                            {
-                                                ui.ctx().memory_mut(|mem| mem.surrender_focus(id));
-                                            }
-                                        }
+                                        let selected = self.selected_port == Some(index);
+                                        let selected_port = port.clone();
+                                        let stripe = if row % 2 == 1 {
+                                            ui.visuals().faint_bg_color
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        };
+                                        egui::Frame::new().fill(stripe).show(ui, |ui| {
+                                            ui.with_layout(
+                                                egui::Layout::top_down_justified(egui::Align::LEFT),
+                                                |ui| {
+                                                    if ui
+                                                        .selectable_label(selected, label)
+                                                        .clicked()
+                                                    {
+                                                        self.selected_port = Some(index);
+                                                        self.start_video(&selected_port);
+                                                        // Drop focus so Space/Enter go to the KVM
+                                                        // target instead of re-activating this label.
+                                                        if let Some(id) =
+                                                            ui.ctx().memory(egui::Memory::focused)
+                                                        {
+                                                            ui.ctx().memory_mut(|mem| {
+                                                                mem.surrender_focus(id);
+                                                            });
+                                                        }
+                                                    }
+                                                },
+                                            );
+                                        });
                                     }
                                 },
                             );
