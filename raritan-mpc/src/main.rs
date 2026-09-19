@@ -1145,20 +1145,10 @@ impl eframe::App for MpcApp {
                                         let label = if port.is_busy() {
                                             format!(
                                                 "{}  👥 {name} (in use)",
-                                                port.index.map_or_else(
-                                                    || "?".to_owned(),
-                                                    |value| value.to_string()
-                                                ),
+                                                port.display_index(),
                                             )
                                         } else {
-                                            format!(
-                                                "{}  {}",
-                                                port.index.map_or_else(
-                                                    || "?".to_owned(),
-                                                    |value| value.to_string()
-                                                ),
-                                                name,
-                                            )
+                                            format!("{}  {}", port.display_index(), name)
                                         };
                                         let selected = self.selected_port == Some(index);
                                         let selected_port = port.clone();

@@ -28,14 +28,16 @@ pub struct ConnectionConfig {
 /// Finds a port by index, id, id suffix, exact name, or name substring.
 /// Precedence: exact index → id → name → id suffix → name substring.
 /// Empty selectors are rejected (they'd match everything).
+/// The index is the 1-indexed number shown in the UI (`@index + 1`);
+/// the raw 0-indexed wire value is also accepted for compatibility.
 pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port> {
     if selector.is_empty() {
         eyre::bail!("empty port selector");
     }
     if let Some(port) = ports.iter().find(|port| {
-        port.index
-            .is_some_and(|index| index.to_string() == selector)
-            || port.id == selector
+        port.index.is_some_and(|index| {
+            index.to_string() == selector || index.saturating_add(1).to_string() == selector
+        }) || port.id == selector
             || port.name.as_deref() == Some(selector)
     }) {
         return Ok(port);

@@ -67,9 +67,7 @@ fn main() -> color_eyre::Result<()> {
         switch.ip_address.as_deref().unwrap_or(&args.host),
     );
     for port in &ports {
-        let index = port
-            .index
-            .map_or_else(|| "-".to_owned(), |index| index.to_string());
+        let index = port.display_index();
         println!(
             "{:>3} {:<28} {:<12} id={:?} status={:?} available={:?}",
             index,

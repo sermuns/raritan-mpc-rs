@@ -31,6 +31,12 @@ pub(crate) fn parse_ports(xml: &str) -> Result<Vec<Port>> {
 }
 
 impl Port {
+    /// Physical port number as printed on the switch (1-indexed).
+    /// The wire `@index` is 0-indexed, so the UI shows `index + 1`.
+    pub fn display_index(&self) -> String {
+        self.index
+            .map_or_else(|| "?".to_owned(), |value| (value.saturating_add(1)).to_string())
+    }
     /// Ports worth listing: available (1) or busy (2). Unavailable (0)
     /// and unknown statuses stay hidden, like the Java client.
     pub fn is_listed(&self) -> bool {
