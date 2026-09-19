@@ -1,26 +1,14 @@
 //! Client → server input events: keyboard, pointer, video settings.
 //!
-//! Key events (`RfbKeyEventMsgV01_27`, used by the V01_29 handler):
-//! `[4, 0, keysym:u16-be]` where the keysym is the Eric code with the
-//! high bit set for key-press:
-//! `code = eric & 0x7FFF | (down ? 0x8000 : 0)`.
-//! (Confirmed by call chain — `processKeyPressedInternal` passes
-//! `false`, which sets the bit — and by capture: each tap's first
-//! frame has the bit set.)
+//! Key events (`RfbKeyEventMsgV01_27`): `[4, 0, keysym:u16-be]`, the Eric code
+//! with the high bit set for presses (confirmed against a Java capture).
 //!
 //! Pointer events (`RfbPointerEventMsgV01_22`):
-//! `[5, buttons, x:u16-be, y:u16-be, wheel:u16-be]`. Button mask is
-//! standard RFB (bit 0 left, 1 middle, 2 right; toggled per press).
-//! Wheel-only events carry `x = y = 0` with the signed rotation in
-//! `wheel` (`consumeMouseWheelEvent`). Verified against a Java capture
-//! of mouse moves plus one left click (`05 01 01 d1 01 b4 00 00`).
+//! `[5, buttons, x:u16-be, y:u16-be, wheel:u16-be]` with the standard RFB
+//! button mask; wheel-only events carry `x = y = 0` (also verified by capture).
 //!
-//! The Eric codes are Raritan's own numbering (from
-//! `KeyTranslatorBase.addKeys` in the Java client, en_US layout), keyed
-//! by Java `KeyEvent` key code + key location (1 = standard, 2 = left,
-//! 3 = right, 4 = numpad). Verified against a Java capture typing
-//! "hello world" + Enter: h→0x22, e→0x11, l→0x25, o→0x17, space→0x38,
-//! w→0x10, r→0x12, d→0x1f, enter→0x1b, each as down/up pairs.
+//! Eric codes are Raritan's own numbering (`KeyTranslatorBase.addKeys`, en_US),
+//! keyed by Java key code + location (1 = standard, 2 = left, 3 = right, 4 = numpad).
 
 use crate::{
     proto::{KEY_EVENT, POINTER_EVENT},
@@ -29,9 +17,7 @@ use crate::{
 use eyre::{Result, bail};
 use std::io::{Read, Write};
 
-/// Outbound commands for the video worker: key presses/releases,
-/// pointer moves/clicks/wheel, and video-settings actions
-/// (calibration, auto-sense).
+/// Outbound commands for the video worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCommand {
     Key {
@@ -51,7 +37,6 @@ pub enum VideoCommand {
 }
 
 impl<S: Read + Write> RfbStream<S> {
-    /// Sends one key press or release for the given Eric code.
     pub fn write_key_event(&mut self, eric: u16, down: bool) -> Result<()> {
         if eric & 0x8000 != 0 {
             bail!("Eric code out of range: {eric:#x}");
@@ -63,9 +48,6 @@ impl<S: Read + Write> RfbStream<S> {
         Ok(())
     }
 
-    /// Sends one pointer event: button mask, absolute target pixels,
-    /// and wheel rotation (0 for plain moves; wheel-only events use
-    /// `x = y = 0` like the Java client).
     pub fn write_pointer_event(&mut self, buttons: u8, x: u16, y: u16, wheel: u16) -> Result<()> {
         let mut message = [0u8; 8];
         message[0] = POINTER_EVENT;
@@ -78,10 +60,7 @@ impl<S: Read + Write> RfbStream<S> {
         Ok(())
     }
 
-    /// Sends a video-settings action (`RfbVideoSettingsC2SMsgV01_22`,
-    /// type 144): `[144, setting, value:u16-be]`. The V01_29 handler
-    /// uses the V01_27 settings table, where 19 = color calibration
-    /// and 18 = auto-sense (`RfbVideoSettingsHandler_V01_27`).
+    /// Video-settings action (type 144): 19 = color calibration, 18 = auto-sense.
     pub fn write_video_settings_event(&mut self, setting: u8, value: u16) -> Result<()> {
         self.stream.write_all(&[144, setting])?;
         self.stream.write_all(&value.to_be_bytes())?;
@@ -89,16 +68,11 @@ impl<S: Read + Write> RfbStream<S> {
         Ok(())
     }
 
-    /// Releases every key code (0–137). The switch holds per-target key
-    /// state across connections, so a modifier whose release was lost
-    /// (e.g. app killed or focus switched while held) would otherwise
-    /// stay down forever — even across reconnects and app restarts.
-    /// Releases are no-ops for keys that aren't down (the Java client
-    /// itself sends defensive releases), so this is safe to run on
-    /// every connect.
+    /// Releases every key code (0–137): the switch holds per-target key state,
+    /// so a lost release would stick forever. No-op for keys not down, safe
+    /// on every connect.
     pub fn release_all_keys(&mut self) -> Result<()> {
-        // All 138 release messages in a single write: same bytes as 138
-        // individual key events, without 138 tiny packets per connect.
+        // One write for all 138 releases instead of 138 tiny packets.
         let mut batch = Vec::with_capacity(138 * 4);
         for eric in 0..=137u16 {
             batch.extend_from_slice(&[KEY_EVENT, 0, (eric >> 8) as u8, eric as u8]);
@@ -109,9 +83,8 @@ impl<S: Read + Write> RfbStream<S> {
     }
 }
 
-/// Translates a Java key code + location to the wire Eric code,
-/// mirroring `KeyTranslator.translateKeyEvent` (exact-code lookup, with
-/// the location-0 → location-1 fallback from `getByCode`).
+/// Java key code + location → wire Eric code, mirroring
+/// `KeyTranslator.translateKeyEvent` (location 0 falls back to 1).
 pub fn eric_code(java_code: i32, location: i32) -> Option<u16> {
     if let Some(eric) = eric_by_code(java_code, location) {
         return Some(eric);
@@ -311,8 +284,6 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    /// The capture typing "hello world" + Enter: down/up pairs of
-    /// 0x22 0x11 0x25 0x25 0x17 0x38 0x10 0x17 0x12 0x25 0x1f 0x1b.
     #[test]
     fn hello_world_enter_matches_capture() {
         let cases = [
@@ -356,7 +327,6 @@ mod tests {
         stream.release_all_keys().unwrap();
         let bytes = stream.stream.into_inner();
         assert_eq!(bytes.len(), 138 * 4);
-        // Every message is a release: [4, 0, hi, lo] with top bit clear.
         assert_eq!(&bytes[0..4], &[4, 0, 0, 0]);
         assert_eq!(&bytes[bytes.len() - 4..], &[4, 0, 0, 137]);
         for chunk in bytes.chunks_exact(4) {
@@ -368,8 +338,7 @@ mod tests {
 
     #[test]
     fn pointer_event_bytes_match_java_client() {
-        // Real captured move + left click at (465, 436):
-        // `05 00 00 b5 ...` and `05 01 01 d1 01 b4 00 00`.
+        // Real captured move + left click at (465, 436).
         let mut stream = RfbStream::new(Cursor::new(Vec::new()));
         stream.write_pointer_event(0, 0xb5, 0, 0).unwrap();
         stream.write_pointer_event(1, 0x01d1, 0x01b4, 0).unwrap();
@@ -381,8 +350,7 @@ mod tests {
 
     #[test]
     fn calibration_event_bytes_match_java_client() {
-        // `RfbVideoSettingsHandler_V01_27.requestVideoColorCalibration`
-        // → `writeVideoSettingsEvent(19, 0)` → `[144, 19, 0, 0]`.
+        // `requestVideoColorCalibration` → `writeVideoSettingsEvent(19, 0)`.
         let mut stream = RfbStream::new(Cursor::new(Vec::new()));
         stream.write_video_settings_event(19, 0).unwrap();
         stream.write_video_settings_event(18, 0).unwrap();

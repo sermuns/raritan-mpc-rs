@@ -11,20 +11,17 @@ use std::{
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-/// Initial switch address (editable in the UI, persisted afterwards).
+/// Default switch address; editable in the UI and persisted.
 const DEFAULT_HOST: &str = "";
-/// Factory login; the user/password fields stay disabled unless the
-/// "custom credentials" checkbox is ticked.
+/// Factory login (fields stay disabled unless "custom credentials" is ticked).
 const DEFAULT_USER: &str = "admin";
 const DEFAULT_PASSWORD: &str = "admin";
 
-/// Video sessions attempted per port selection before the worker
-/// surfaces an error (initial try + retries with backoff).
+/// Video session attempts per port selection (initial try + backoff retries).
 const MAX_VIDEO_ATTEMPTS: u32 = 4;
 
-/// Command-line overrides for this run. `--help`/`--version` print and
-/// exit without opening a window; the connection flags override the
-/// persisted sidebar values without overwriting them.
+/// Command-line overrides for this run: `--help`/`--version` exit early;
+/// the flags win without overwriting the persisted sidebar values.
 #[derive(Parser)]
 #[command(version, about = "Raritan MPC graphical KVM client")]
 struct Args {
@@ -74,47 +71,38 @@ fn main() -> eframe::Result {
 }
 
 struct MpcApp {
-    /// Switch address, editable in the sidebar and persisted.
+    /// Switch address (sidebar-editable, persisted).
     host: String,
-    /// Login, editable only when `custom_credentials` is ticked.
     user: String,
     password: String,
-    /// Enables the user/password fields; off means factory admin/admin.
+    /// Tick to edit user/password; unticked means factory admin/admin.
     custom_credentials: bool,
     ports: Vec<Port>,
     selected_port: Option<usize>,
     error: Option<String>,
     connection_status: String,
     frames: Option<Receiver<FrameMessage>>,
-    /// Outbound commands (key events, calibration, auto-sense) for the
-    /// video worker. `None` while no video session is running.
+    /// Outbound commands for the video worker; `None` with no session.
     cmd_tx: Option<Sender<VideoCommand>>,
     texture: Option<egui::TextureHandle>,
     framebuffer_size: Option<(u16, u16)>,
     show_sidebar: bool,
     sort_order: SortOrder,
-    /// Pending port-list refresh result. `Some` while the background
-    /// enumeration runs; the button is inert until it completes.
+    /// In-flight port-list refresh; the buttons wait on it.
     port_refresh: Option<Receiver<RefreshResult>>,
-    /// Identity of the connected switch, from its `<CSC_Info>` payload.
-    /// `None` until the first successful enumeration.
+    /// Switch identity from `<CSC_Info>`; `None` until first enumeration.
     switch_info: Option<SwitchInfo>,
-    /// Whether the Ctrl+Alt+Delete confirmation dialog is open.
     confirm_cad: bool,
-    /// Displayed image rect from the last frame, for mapping pointer
-    /// positions to target pixels.
+    /// Last frame's image rect, for mapping pointer to target pixels.
     viewport: Option<egui::Rect>,
-    /// Currently held mouse buttons (RFB mask) on the target.
+    /// Held mouse buttons (RFB mask).
     mouse_buttons: u8,
-    /// Last pointer state sent (buttons, x, y); moves only go out on
-    /// change, like the Java client.
+    /// Last pointer state sent; moves only go out on change.
     last_pointer: Option<(u8, u16, u16)>,
-    /// Fractional wheel lines awaiting a whole notch.
+    /// Sub-notch wheel remainder.
     wheel_remainder: f32,
-    /// Manual video action awaiting resumed frames ("Calibrating color…"
-    /// / "Auto-sensing video…"). Set when the action is sent, cleared by
-    /// the next decoded frame — the switch pauses the stream while it
-    /// works, and otherwise the frozen picture looks like a hang.
+    /// Manual video action awaiting resumed frames; cleared by the next
+    /// decoded frame (the switch pauses the stream while working).
     pending_video_action: Option<String>,
 }
 
@@ -134,8 +122,7 @@ impl SortOrder {
     }
 }
 
-/// Background enumeration result: the active ports plus the switch
-/// identity from its `<CSC_Info>` payload.
+/// Background enumeration result: active ports + switch identity.
 type RefreshResult = Result<(Vec<Port>, SwitchInfo), String>;
 
 enum FrameMessage {
@@ -155,10 +142,8 @@ impl MpcApp {
         user_override: Option<String>,
         password_override: Option<String>,
     ) -> Self {
-        // Restore the last-used connection values via eframe persistence
-        // (ron file under the OS data dir). Missing keys fall back to the
-        // factory defaults; command-line flags win over both for this run
-        // (without overwriting what is stored).
+        // Restore last-used values via eframe persistence; CLI flags win
+        // for this run without overwriting stored values.
         let storage = creation_context.storage;
         let get = |key: &str| storage.and_then(|storage| storage.get_string(key));
         let mut custom_credentials = get("custom_credentials").is_some_and(|value| value == "1");
@@ -199,14 +184,12 @@ impl MpcApp {
             wheel_remainder: 0.0,
             pending_video_action: None,
         };
-        // Enumerate in the background so a slow/offline switch can't
-        // freeze window creation.
+        // Enumerate off-thread so a slow switch can't block startup.
         app.refresh_ports();
         app
     }
 
     /// Clears per-session video state (texture, size cache, pointer).
-    /// Used both when starting video and on disconnect.
     fn clear_frame_state(&mut self) {
         self.texture = None;
         self.framebuffer_size = None;
@@ -217,8 +200,7 @@ impl MpcApp {
         self.pending_video_action = None;
     }
 
-    /// Drops the video session and its UI state, shared by the
-    /// Disconnect button and the Connect (re-target) button.
+    /// Drops the video session and its UI state.
     fn disconnect_video(&mut self) {
         self.frames = None;
         self.cmd_tx = None;
@@ -230,8 +212,7 @@ impl MpcApp {
     fn start_video(&mut self, port: &Port) {
         let port_id = port.id.clone();
         info!(%port_id, "starting framebuffer worker");
-        // Bounded channel: backpressure instead of unbounded 3 MiB/frame
-        // growth when the network outruns the 33 ms repaint.
+        // Bounded channel so a fast network can't pile up 3 MiB frames.
         let (sender, receiver) = mpsc::sync_channel(2);
         let (cmd_sender, cmd_receiver) = mpsc::channel();
         self.frames = Some(receiver);
@@ -239,8 +220,7 @@ impl MpcApp {
         self.clear_frame_state();
         self.error = None;
         self.connection_status = "Starting framebuffer worker".to_owned();
-        // Snapshot the connection values: later UI edits apply to the
-        // next session, never to the running worker.
+        // Snapshot connection values; later UI edits apply to the next session.
         let host = self.host.clone();
         let user = self.user.clone();
         let password = self.password.clone();
@@ -250,13 +230,10 @@ impl MpcApp {
                 user,
                 password,
             };
-            // The pump only exits on error, so a session either runs
-            // forever or fails into a retry with backoff. The reboot
-            // case (colormap/mode switches) is survived inline; these
-            // retries cover hard drops (switch failover, network blips).
+            // The pump only exits on error; reboots are survived inline,
+            // so these retries cover hard drops (failover, network blips).
             for attempt in 1..=MAX_VIDEO_ATTEMPTS {
-                // Drop input queued while disconnected so a reconnect
-                // doesn't replay a burst of stale presses and moves.
+                // Drop stale queued input so a reconnect doesn't replay it.
                 while cmd_receiver.try_recv().is_ok() {}
                 match run_video_session(&config, &port_id, &sender, &cmd_receiver) {
                     Ok(()) => return,
@@ -280,8 +257,7 @@ impl MpcApp {
         });
     }
 
-    /// Display order for the port list: enumeration (port-number) order
-    /// by default, case-insensitive by name when selected.
+    /// Port-list display order: enumeration order, or case-insensitive by name.
     fn port_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.ports.len()).collect();
         if self.sort_order == SortOrder::Name {
@@ -299,9 +275,7 @@ impl MpcApp {
         order
     }
 
-    /// Re-runs port enumeration off the UI thread. The result lands in
-    /// `port_refresh` and is applied on the next frame; inert while one
-    /// is already in flight.
+    /// Re-runs port enumeration off the UI thread; inert while one is in flight.
     fn refresh_ports(&mut self) {
         if self.port_refresh.is_some() {
             return;
@@ -319,8 +293,6 @@ impl MpcApp {
         });
     }
 
-    /// Re-targets the switch: drops any video session and port list,
-    /// then enumerates the newly entered address.
     fn reconnect(&mut self) {
         self.disconnect_video();
         self.ports.clear();
@@ -328,8 +300,6 @@ impl MpcApp {
         self.refresh_ports();
     }
 
-    /// Drops everything switch-related (video session, port list,
-    /// switch identity); back to the pre-connect state.
     fn disconnect_switch(&mut self) {
         self.disconnect_video();
         self.ports.clear();
@@ -337,8 +307,7 @@ impl MpcApp {
         self.connection_status = "Disconnected".to_owned();
     }
 
-    /// Applies a finished refresh: swaps in the new list, keeps the
-    /// selected port if it still exists, and reports errors.
+    /// Applies a finished refresh, keeping the selection if possible.
     fn apply_refresh(&mut self, result: RefreshResult) {
         self.port_refresh = None;
         match result {
@@ -362,11 +331,9 @@ impl MpcApp {
         }
     }
 
-    /// Builds pointer commands for this frame from unhandled input.
-    /// Button transitions always go out (at the last known position
-    /// when the pointer is outside the image, so a release can't be
-    /// lost); moves only when hovering the image and changed; wheel
-    /// notches become wheel-only events exactly like the Java client.
+    /// Pointer commands for this frame. Button transitions always go out
+    /// (falling back to the last known position so releases can't be lost);
+    /// moves only when hovering and changed.
     fn pointer_commands(&mut self, ui: &egui::Ui) -> Vec<VideoCommand> {
         let Some(size) = self.framebuffer_size else {
             return Vec::new();
@@ -405,8 +372,7 @@ impl MpcApp {
         let mapped =
             hover.and_then(|pos| self.viewport.and_then(|rect| map_pointer(rect, size, pos)));
         let fallback = self.last_pointer.map(|(_, x, y)| (x, y)).or(Some((0, 0)));
-        // Clicks use the last known position as fallback; plain moves
-        // only go out when the position actually changed.
+        // Plain moves only go out when the position actually changed.
         let target: Option<(u16, u16)> = if !button_changes.is_empty() {
             mapped.or(fallback)
         } else {
@@ -441,8 +407,7 @@ impl MpcApp {
     }
 }
 
-/// Port enumeration filtered to active ports, shared by startup and
-/// refresh so the connect/filter logic lives in one place.
+/// Port enumeration filtered to active ports.
 fn enumerate_active_ports(host: &str, user: &str, password: &str) -> RefreshResult {
     let mut client =
         RdmClient::connect(host, user, password).map_err(|error| format!("{error:?}"))?;
@@ -459,8 +424,7 @@ fn enumerate_active_ports(host: &str, user: &str, password: &str) -> RefreshResu
 }
 
 /// One video session: RDM login, RFB handshake, then the pump loop
-/// until the first hard error. Returns `Ok` only if the loop ever
-/// exits cleanly (in practice it runs until it fails).
+/// until the first hard error.
 fn run_video_session(
     config: &ConnectionConfig,
     port_id: &str,
@@ -473,10 +437,9 @@ fn run_video_session(
     };
     status("Connecting to RDM");
     info!(%port_id, "connecting video session");
-    // NOTE: the TR video-stream grant (cmd 55) is intentionally
-    // skipped: the switch never answers it, while RFB carries
-    // its own KVM-switch event and streams fine without it.
-    // `establish_video` also holds the RDM event session.
+    // NOTE: the TR video-stream grant (cmd 55) is skipped (never
+    // answered; RFB streams without it). `establish_video` also holds
+    // the RDM event session.
     let mut rfb = establish_video(config, port_id)?;
     status("RFB connected; waiting for framebuffer");
     let (width, height) = rfb
@@ -484,21 +447,15 @@ fn run_video_session(
         .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
     let format = PixelFormat::RGB565;
     let mut framebuffer = Framebuffer::try_new(width, height)?;
-    // Short read timeout so queued input events are flushed promptly
-    // even when the server sends nothing. NOTE: this must stay
-    // generous — firing mid-framebuffer-update discards partial bytes
-    // and desyncs the stream (20 ms did exactly that over the tunnel:
-    // freeze after a few frames, then "failed to fill whole buffer").
+    // Short read timeout so queued input flushes promptly. NOTE: keep it
+    // generous — 20 ms fired mid-update and desynced the stream.
     rfb.set_read_timeout(Some(Duration::from_millis(100)))?;
-    // Eric codes currently held down on the target. On exit every held
-    // key is released so a dropped connection can never leave the
-    // target with a key stuck down (which the VM would repeat forever).
+    // Keys held on the target; all are released on exit so none stays stuck down.
     let mut held: Vec<u16> = Vec::new();
     let mut dropped_frames: u64 = 0;
     let result = (|| -> eyre::Result<()> {
         loop {
-            // Drain ALL queued input first: input has priority over video
-            // and every event (key/mouse) is sent through, never dropped.
+            // Drain all queued input first; every event goes through, never dropped.
             loop {
                 match cmd_receiver.try_recv() {
                     Ok(command) => match command {
@@ -528,8 +485,7 @@ fn run_video_session(
                     },
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        // GUI dropped cmd_tx (Disconnect/reselect): exit so the
-                        // thread does not survive indefinitely when idle.
+                        // GUI dropped cmd_tx: exit instead of idling forever.
                         info!("video worker: command channel closed; exiting");
                         return Ok(());
                     }
@@ -537,14 +493,12 @@ fn run_video_session(
             }
             let update = match rfb.read_message() {
                 Ok(update) => update,
-                // Idle poll: loop back to the top, which observes command
-                // channel disconnects within one timeout window.
+                // Idle poll: loop back to observe command-channel disconnects.
                 Err(error) if is_read_timeout(&error) => continue,
                 Err(error) => return Err(error),
             };
-            // Late 128 format changes (text mode ↔ graphics on session
-            // start) resize the stream: recreate the pixel buffer or
-            // rects clip and the picture misaligns.
+            // Late 128 format changes resize the stream: recreate the pixel
+            // buffer or rects clip and misalign.
             if let Some((width, height)) = rfb.framebuffer_size()
                 && (framebuffer.width != width || framebuffer.height != height)
             {
@@ -557,10 +511,8 @@ fn run_video_session(
                 "decoded framebuffer update"
             );
             framebuffer.apply_update(&update, format)?;
-            // Never block the pump on the GUI: if it is behind, drop this
-            // frame (framedrops are fine; low latency is what matters) and
-            // keep the loop running so input stays responsive. Only a
-            // closed receiver (Disconnect/reselect) exits the worker.
+            // Never block the pump on a slow GUI: drop frames, keep latency
+            // low. Only a closed receiver exits the worker.
             match sender.try_send(FrameMessage::Frame {
                 width: framebuffer.width,
                 height: framebuffer.height,
@@ -585,13 +537,12 @@ fn run_video_session(
     for eric in held {
         let _ = rfb.write_key_event(eric, false);
     }
-    // Release any held mouse buttons for the same reason.
+    // Release held mouse buttons too.
     let _ = rfb.write_pointer_event(0, 0, 0, 0);
     result
 }
 
-/// True when the error is just the worker's read timeout expiring
-/// (no server data within the poll window), as opposed to a real failure.
+/// True when the error is just the idle read timeout, not a real failure.
 fn is_read_timeout(error: &eyre::Report) -> bool {
     error
         .chain()
@@ -604,8 +555,7 @@ fn is_read_timeout(error: &eyre::Report) -> bool {
         })
 }
 
-/// RFB button bit for an egui pointer button (standard mask: bit 0
-/// left, 1 middle, 2 right).
+/// RFB button bit for an egui pointer button.
 fn pointer_bit(button: egui::PointerButton) -> u8 {
     match button {
         egui::PointerButton::Primary => 1,
@@ -616,8 +566,7 @@ fn pointer_bit(button: egui::PointerButton) -> u8 {
     }
 }
 
-/// Maps a window position to target framebuffer pixels via the displayed
-/// image rect. `None` when the pointer is outside the image.
+/// Maps a window position to target pixels. `None` outside the image.
 fn map_pointer(viewport: egui::Rect, size: (u16, u16), pos: egui::Pos2) -> Option<(u16, u16)> {
     if !viewport.contains(pos) {
         return None;
@@ -634,9 +583,7 @@ fn map_pointer(viewport: egui::Rect, size: (u16, u16), pos: egui::Pos2) -> Optio
     ))
 }
 
-/// Ctrl+Alt+Delete press/release sequence (left modifiers, Delete),
-/// resolved through the en_US Eric table. Presses go down in order,
-/// releases come back in reverse.
+/// Ctrl+Alt+Delete via the en_US Eric table: presses in order, releases reversed.
 fn cad_sequence() -> Vec<VideoCommand> {
     let held: Vec<u16> = [(17, 2), (18, 2), (127, 1)]
         .into_iter()
@@ -657,10 +604,8 @@ fn cad_sequence() -> Vec<VideoCommand> {
     sequence
 }
 
-/// Maps an egui key to the Java key code + location the en_US Eric table
-/// in `raritan-rfb` expects. Shifted US symbols (e.g. `?`, `!`, `:`)
-/// map to their physical base key; the Shift press itself is forwarded
-/// as a separate event, exactly like the Java client sends it.
+/// Maps an egui key to the (code, location) the Eric table expects.
+/// Shifted symbols map to their physical base key; Shift goes as its own event.
 fn java_key(key: egui::Key) -> Option<(i32, i32)> {
     use egui::Key as K;
     Some(match key {
@@ -750,10 +695,8 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
     })
 }
 
-/// Window icon decoded from the embedded `media/icon-128.png` (`None`
-/// keeps the toolkit default; a broken asset must never block startup).
-/// Decoded with the `png` crate directly — the only format ever embedded
-/// here — instead of pulling in a full image-codec dependency.
+/// Window icon from the embedded `media/icon-128.png` (`None` keeps the
+/// toolkit default; a broken asset must never block startup).
 fn load_app_icon() -> Option<std::sync::Arc<egui::IconData>> {
     let mut reader = png::Decoder::new(std::io::Cursor::new(include_bytes!(
         "../../media/icon-128.png"
@@ -781,9 +724,8 @@ fn load_app_icon() -> Option<std::sync::Arc<egui::IconData>> {
     }))
 }
 
-/// Short git sha for the version stamp, from vergen-gitcl's
-/// `VERGEN_GIT_SHA` (set by `build.rs`). Falls back to placeholders
-/// when built outside a git checkout, with `*` marking a dirty tree.
+/// Short git sha for the version stamp (via `build.rs`); `"unknown"`
+/// outside git, `*` marking a dirty tree.
 fn short_sha() -> String {
     match option_env!("VERGEN_GIT_SHA") {
         Some(sha) => {
@@ -798,9 +740,8 @@ fn short_sha() -> String {
     }
 }
 
-/// Sidebar collapse/expand toggle: the arrow points where the sidebar
-/// goes — ◀ collapses it away, ▶ brings it back. Labeled "Sidebar"
-/// (not "Ports") since it holds the switch connection, not just ports.
+/// Sidebar toggle: the arrow points where the sidebar goes. Labeled
+/// "Sidebar" (not "Ports") since it holds the connection too.
 fn sidebar_toggle_label(expanded: bool) -> &'static str {
     if expanded {
         "◀ Sidebar"
@@ -817,21 +758,16 @@ fn sidebar_toggle_hover(expanded: bool) -> &'static str {
     }
 }
 
-/// Height of the top action bar: tall enough for the heading, allocated
-/// up front so the smaller buttons/labels are truly vertically centered.
-/// With a plain `ui.horizontal` the row starts at button height and only
-/// grows when the heading is placed, leaving earlier widgets stuck to
-/// the top.
+/// Top-bar height, fixed up front so smaller widgets center vertically
+/// (a plain horizontal row grows as widgets land).
 fn top_bar_height(ui: &egui::Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Heading)
         .max(ui.spacing().interact_size.y)
 }
 
 impl eframe::App for MpcApp {
-    /// Persists the connection values via eframe's official storage
-    /// (ron file under the OS data dir, written on exit). Note the
-    /// password is stored in plaintext alongside the host/username —
-    /// same exposure as typing it into the CLI flags.
+    /// Persists connection values via eframe storage (written on exit).
+    /// Note: the password is stored in plaintext, like the CLI flags.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("host", self.host.clone());
         storage.set_string("username", self.user.clone());
@@ -848,10 +784,8 @@ impl eframe::App for MpcApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(receiver) = &self.frames {
-            // Drain the backlog but upload only the freshest frame: when
-            // the network outruns the UI, intermediate frames would each
-            // cost a texture upload for a pixel that is never displayed.
-            // Status/Error messages are still all processed in order.
+            // Upload only the freshest frame; skipped uploads never display.
+            // Status/Error messages are still all processed.
             let mut latest_frame: Option<(u16, u16, Vec<u8>)> = None;
             while let Ok(message) = receiver.try_recv() {
                 match message {
@@ -868,18 +802,14 @@ impl eframe::App for MpcApp {
                     FrameMessage::Error(error) => {
                         warn!(%error, "framebuffer error received by GUI");
                         self.error = Some(error);
-                        // Worker is gone; stop queueing commands for it.
                         self.cmd_tx = None;
                     }
                 }
             }
             if let Some((width, height, rgba)) = latest_frame {
-                // Frames flowing again clears any "waiting for video"
-                // notice set by Calibrate/Auto sense.
+                // Fresh frames clear any "waiting for video" notice.
                 self.pending_video_action = None;
-                // A late resolution change resizes the stream: drop the
-                // old texture so it is recreated at the new dimensions
-                // instead of stretching the new pixels into it.
+                // Drop the texture on resize so it recreates instead of stretching.
                 if self.framebuffer_size != Some((width, height)) {
                     self.texture = None;
                 }
@@ -902,11 +832,8 @@ impl eframe::App for MpcApp {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
 
-        // Forward physical key presses to the KVM target while a video
-        // session runs. Text events are deliberately ignored (the Key
-        // press/release pair already carries what the target needs).
-        // Pointer moves/clicks/wheel go through the same channel once
-        // mapped from the displayed image rect to target pixels.
+        // Forward key presses to the target while a session runs (text events
+        // ignored: the press/release pair suffices; pointer events share the channel).
         if self.cmd_tx.is_some() {
             let mut commands: Vec<VideoCommand> = ui.ctx().input(|input| {
                 input
@@ -935,8 +862,7 @@ impl eframe::App for MpcApp {
         }
 
         if self.show_sidebar {
-            // Collect a finished background refresh before drawing: the
-            // list below always shows the latest applied ports.
+            // Apply a finished background refresh before drawing.
             if let Some(receiver) = self.port_refresh.take() {
                 match receiver.try_recv() {
                     Ok(result) => self.apply_refresh(result),
@@ -948,13 +874,10 @@ impl eframe::App for MpcApp {
                     }
                 }
             }
-            // Sized to hug the content: the widest fixed row ("Sort by:"
-            // + combo box ≈ 152 pt with the bundled fonts) plus frame
-            // margins, with a few pt of slack. `max_size` (not just
-            // `default_size`) is what enforces this: egui persists the
-            // panel width across runs and the stored value wins over the
-            // default, so without the cap a stale 220 pt from earlier
-            // versions would stick forever.
+            // Hug the content: widest fixed row ("Sort by:" + combo ≈ 152 pt)
+            // plus margins. `max_size` enforces it: egui persists panel widths
+            // and the stored value wins over the default, so a stale 220 pt
+            // would otherwise stick forever.
             egui::Panel::left("ports")
                 .default_size(180.0)
                 .max_size(180.0)
@@ -965,8 +888,7 @@ impl eframe::App for MpcApp {
                         ui.label("Host:");
                         ui.text_edit_singleline(&mut self.host);
                     });
-                    // Unticking restores the factory login; ticking
-                    // enables the fields for editing.
+                    // Unticking restores the factory login.
                     if ui
                         .checkbox(&mut self.custom_credentials, "Custom credentials")
                         .changed()
@@ -1002,9 +924,7 @@ impl eframe::App for MpcApp {
                             self.refresh_ports();
                         }
                     });
-                    // Identity of the connected switch, from its CSC_Info
-                    // payload. Shown once the first enumeration lands.
-                    // Cloned: the disconnect button below mutates `self`.
+                    // Connected switch identity (CSC_Info); cloned since Disconnect mutates `self`.
                     if let Some(info) = self.switch_info.clone() {
                         ui.separator();
                         ui.label(format!(
@@ -1048,11 +968,7 @@ impl eframe::App for MpcApp {
                     if self.port_refresh.is_some() {
                         ui.spinner();
                     }
-                    // Footer in a nested bottom panel: unlike a bottom-up
-                    // layout block (whose min_rect reaches the available
-                    // bottom and eats the cursor for everything after it),
-                    // this reserves only its own height, leaving the rest
-                    // for the scroll area below.
+                    // Footer as a nested bottom panel so it reserves only its own height.
                     egui::Panel::bottom("version").show(ui, |ui| {
                         ui.small(format!("v{} · {}", env!("CARGO_PKG_VERSION"), short_sha()));
                     });
@@ -1060,8 +976,7 @@ impl eframe::App for MpcApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .show(ui, |ui| {
-                            // Justified so every port row is equally wide
-                            // (full list width) instead of hugging its text.
+                            // Justified: every port row spans the full list width.
                             ui.with_layout(
                                 egui::Layout::top_down_justified(egui::Align::LEFT),
                                 |ui| {
@@ -1100,15 +1015,13 @@ impl eframe::App for MpcApp {
 
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(index) = self.selected_port {
-                // Clone for the closure below: it mutates `self`
-                // (via `clear_frame_state`), so it cannot also borrow it.
+                // Clone: the closure below mutates `self`, so it can't also borrow it.
                 let port_name = self.ports[index]
                     .name
                     .clone()
                     .unwrap_or_else(|| "Selected port".to_owned());
                 let port_id = self.ports[index].id.clone();
-                // Fixed-height row: heading, labels and buttons share a
-                // known height up front, so all are vertically centered.
+                // Fixed-height row so heading, labels and buttons all center vertically.
                 let row_height = top_bar_height(ui);
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), row_height),
@@ -1120,25 +1033,19 @@ impl eframe::App for MpcApp {
                         ui.heading(&port_name);
                         ui.label(format!("Port ID: {port_id}"));
                         if self.cmd_tx.is_some() {
-                            // Right-align the buttons.
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     if ui.button("× Disconnect").clicked() {
-                                        // Drop our ends of the channels: the next
-                                        // worker send fails and the thread exits
-                                        // (bounded by the pump's read timeout),
-                                        // closing the connection.
+                                        // Drop our channel ends; the worker exits on its next failed send.
                                         self.disconnect_video();
                                         self.connection_status = "Disconnected".to_owned();
                                     }
                                     if ui.button("⌨ Ctrl+Alt+Del").clicked() {
                                         self.confirm_cad = true;
                                     }
-                                    // Manual video actions, mirroring the Java
-                                    // client's Calibrate Color / Auto Sense menu
-                                    // entries (V01_27 settings table: 18 =
-                                    // auto-sense, 19 = color calibration).
+                                    // Manual video actions, mirroring the Java client
+                                    // (setting 18 = auto-sense, 19 = calibration).
                                     for (label, setting, waiting) in [
                                         ("◎ Auto sense", 18, "Auto-sensing video…"),
                                         ("🎨 Calibrate color", 19, "Calibrating color…"),
@@ -1150,8 +1057,7 @@ impl eframe::App for MpcApp {
                                                 setting,
                                                 value: 0,
                                             });
-                                            // The switch pauses frames while it works;
-                                            // say so until the stream resumes.
+                                            // The switch pauses frames while working; notice clears on resume.
                                             self.pending_video_action = Some(waiting.to_owned());
                                         }
                                     }
@@ -1163,8 +1069,6 @@ impl eframe::App for MpcApp {
                 if let Some(error) = &self.error {
                     ui.colored_label(egui::Color32::RED, error);
                 }
-                // Manual video actions pause the frame stream while the
-                // switch works; reassure instead of showing a dead picture.
                 if let Some(notice) = &self.pending_video_action {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -1172,8 +1076,7 @@ impl eframe::App for MpcApp {
                     });
                 }
                 ui.separator();
-                // Confirmation dialog for the Secure Attention Sequence,
-                // centered with a backdrop blocking the rest of the UI.
+                // Confirm the Secure Attention Sequence before sending.
                 if self.confirm_cad {
                     egui::containers::Modal::new("cad_confirm".into()).show(ui.ctx(), |ui| {
                         ui.heading("Send Ctrl+Alt+Delete?");
@@ -1194,8 +1097,7 @@ impl eframe::App for MpcApp {
                     });
                 }
                 if let Some(texture) = &self.texture {
-                    // Scale the framebuffer to fit the remaining panel
-                    // area, preserving aspect ratio.
+                    // Fit the framebuffer to the panel, preserving aspect ratio.
                     let native = texture.size_vec2();
                     let texture_id = texture.id();
                     let avail = ui.available_size();
@@ -1207,8 +1109,7 @@ impl eframe::App for MpcApp {
                                     ui.image((texture_id, native * scale)).rect
                                 })
                                 .inner;
-                            // Remember where the image landed so pointer
-                            // positions map back to target pixels.
+                            // Remember the image rect for pointer mapping.
                             self.viewport = Some(rect);
                         }
                     }

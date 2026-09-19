@@ -25,7 +25,6 @@ const MAX_RECT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SKIP_BYTES: usize = 1024 * 1024;
 const MAX_RC_MESSAGE_BYTES: usize = 1024 * 1024;
 
-/// Rejects zero dimensions and buffers over `MAX_FRAMEBUFFER_BYTES`.
 pub(crate) fn validate_framebuffer_dimensions(width: u16, height: u16) -> Result<()> {
     if width == 0 || height == 0 {
         bail!("invalid framebuffer dimensions: {width}x{height}");
@@ -94,7 +93,7 @@ impl<S: Read + Write> RfbStream<S> {
         self.write_ping(PING_REPLY_OUT, serial)
     }
 
-    /// Client ping request (RfbPingRequestMsgV01_22, 8 bytes).
+    /// Client ping request (`RfbPingRequestMsgV01_22`).
     pub fn write_ping_request(&mut self, serial: u32) -> Result<()> {
         self.write_ping(PING_REQUEST, serial)
     }
@@ -172,11 +171,9 @@ impl<S: Read + Write> RfbStream<S> {
         self.skip_blob16()
     }
 
-    /// Consume and discard any server message that carries no video data,
-    /// keeping the stream aligned. Mirrors the `process*` readers in
-    /// `RfbHandler`/`RfbHandlerV01_29` (which throws on type 1 — we
-    /// deliberately survive it: palettized reboot screens must not kill
-    /// a true-color session).
+    /// Discard a non-video server message, keeping the stream aligned.
+    /// Unlike the Java `process*` readers (which throw on type 1), type 1 is
+    /// survived: palettized reboot screens must not kill a true-color session.
     pub(crate) fn skip_server_message(&mut self, message_type: u8) -> Result<()> {
         trace!(message_type, "skipping RFB server message");
         match message_type {
@@ -297,9 +294,8 @@ impl<S: Read + Write> RfbStream<S> {
         Ok(())
     }
 
-    /// Standard `FixColourMapEntries`: `[1][pad][first:u16][count:u16]`
-    /// followed by `count` RGB triples. Only meaningful for palettized
-    /// modes; we always run true-color, so the entries are discarded.
+    /// Standard `FixColourMapEntries`: `[1][pad][first:u16][count:u16]` + triples.
+    /// True-color sessions discard the entries.
     fn skip_colour_map(&mut self) -> Result<()> {
         let _pad = read_u8(&mut self.stream)?;
         let first = read_u16(&mut self.stream)?;
@@ -326,8 +322,8 @@ impl<S: Read + Write> RfbStream<S> {
             bail!("port list too large: {count} ports");
         }
         for _ in 0..count {
-            // Per-port fixed header per RfbPortListMsgV01_27.read:
-            // [kvm:u8][vm:u8][idx:u16][nlen:u16][vlen:u16] (8 bytes).
+            // Per-port header (`RfbPortListMsgV01_27.read`):
+            // [kvm:u8][vm:u8][idx:u16][nlen:u16][vlen:u16].
             let mut fixed = [0; 8];
             self.stream.read_exact(&mut fixed)?;
             let name_len = u16::from_be_bytes([fixed[4], fixed[5]]) as usize;

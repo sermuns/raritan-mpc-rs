@@ -1,17 +1,14 @@
-//! LRLE hardware-encoding decoder.
-//!
-//! Mirrors `ImageDecoderLrle.decodeImage` from the Java client: 16×16
-//! tiles, per-tile runs, line-copy via `prevLine`. LRLE colors are
-//! format-independent (the pixel format only matters for Raw rects).
+//! LRLE hardware-encoding decoder, mirroring `ImageDecoderLrle.decodeImage`:
+//! 16×16 tiles, per-tile runs, line-copy via `prevLine`. Colors are
+//! format-independent (pixel format only matters for Raw rects).
 
 use crate::framebuffer::{Framebuffer, FramebufferRectangle, PixelFormat};
 use eyre::{Result, bail, eyre};
 use raritan_common::read_u8;
 use std::io::Cursor;
 
-/// LRLE decoder configuration, mirroring
-/// `ImageDecoderLrle.LRLEColorDecoderConf` `(is_map, is_compact, is_grey,
-/// depth, grey_depth)` indexed by subencoding.
+/// Decoder configuration mirroring `LRLEColorDecoderConf`,
+/// indexed by subencoding.
 struct LrleConfig {
     map: bool,
     compact: bool,
@@ -58,7 +55,6 @@ fn lrle_greys(grey_depth: usize) -> Vec<u32> {
         .collect()
 }
 
-/// Color table for direct/compact pixels. Grey configs reuse the grey ramp.
 fn lrle_colors(conf: &LrleConfig) -> Vec<u32> {
     if conf.grey {
         return lrle_greys(conf.grey_depth);
@@ -114,14 +110,10 @@ pub(crate) fn decode_lrle_rect(
     rectangle: &FramebufferRectangle,
     _format: PixelFormat,
 ) -> Result<()> {
-    // Mirrors ImageDecoderLrle.decodeImage: 16x16 tiles, per-tile runs,
-    // line-copy via prevLine. LRLE colors are format-independent.
     let subencoding = ((rectangle.encoding as u32 >> 12) & 0xf) as usize;
     let conf = lrle_config(subencoding)?;
     let greys = lrle_greys(conf.grey_depth);
-    // The map path never touches `colors` (up to 32k entries for
-    // depth-15), and grey run paths reuse the grey ramp — build the
-    // color table only when a direct-color run path needs it.
+    // Build the (up to 32k-entry) color table only when a run path needs it.
     let owned_colors;
     let colors: &[u32] = if conf.map {
         &[]
@@ -134,8 +126,7 @@ pub(crate) fn decode_lrle_rect(
     let mut reader = Cursor::new(rectangle.data.as_slice());
     let width = rectangle.width as usize;
     let height = rectangle.height as usize;
-    // Per-tile line-copy state, indexed by column within a 16px tile
-    // (mirrors Java's `prevLine`, which is tile-scoped).
+    // Line-copy state per tile column (Java's tile-scoped `prevLine`).
     let mut previous = [0u32; 16];
     for tile_y in (0..height).step_by(16) {
         for tile_x in (0..width).step_by(16) {
@@ -245,9 +236,8 @@ fn decode_lrle_run(
                 }
             }
         }
-        // Bound the run to the remaining pixels in this tile so a corrupt
-        // run cannot paint past the tile edge (put_pixel clipping would
-        // otherwise hide the overrun and desync the stream).
+        // Bound the run to this tile: a corrupt run must not paint past the
+        // edge (clipping would hide the overrun and desync the stream).
         let painted = row * tile_w + column;
         let remaining = tile_w * tile_h - painted;
         let run = run.min(remaining.saturating_sub(1));
@@ -292,9 +282,8 @@ fn decode_lrle_map(
     for row in 0..tile_h {
         let mut col = 0;
         while col < tile_w {
-            // Full groups pack `group` pixels per byte; a short tail chunk
-            // packs into the low bits. Either way pixel `j` of the chunk
-            // sits `(chunk - 1 - j)` slots from the LSB (MSB first).
+            // A short tail chunk packs into the low bits; pixel `j` sits
+            // `(chunk - 1 - j)` slots from the LSB (MSB first).
             let chunk = (tile_w - col).min(group);
             let byte = read_u8(reader)?;
             for j in 0..chunk {
@@ -318,9 +307,8 @@ fn decode_lrle_map(
 mod tests {
     use super::*;
 
-    /// Map path with a non-multiple tile width (6 px, grey_depth 2):
-    /// one full 4-pixel group plus a 2-pixel tail chunk packed in the
-    /// low bits, both MSB first.
+    /// 6 px wide, grey_depth 2: one full 4-pixel group plus a 2-pixel
+    /// tail chunk in the low bits, both MSB first.
     #[test]
     fn map_path_handles_remainder_chunk() {
         let mut framebuffer = Framebuffer::try_new(6, 1).unwrap();

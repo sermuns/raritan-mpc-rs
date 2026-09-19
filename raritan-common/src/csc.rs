@@ -1,8 +1,5 @@
 //! CSC framing: `[len:u32-be][XML][0x00]`, length includes all 5+ bytes.
-//!
-//! Unified from the two former copies (`raritan-rdm` strict with a 1 MiB
-//! cap, `raritan-rfb` tolerant with a 64 KiB cap). The unified version
-//! keeps the strict NUL check (protocol requires it) with the larger cap.
+//! Strict NUL check (protocol requires it) with the larger 1 MiB cap.
 
 use eyre::{OptionExt, Result, eyre};
 use std::io::{Read, Write};

@@ -1,8 +1,5 @@
 //! Shared primitives for the Raritan crates: well-known ports/timeouts,
 //! CSC framing, legacy TLS setup, XML helpers, RC4, and big-endian IO.
-//!
-//! Extracted from duplicated copies in `raritan-rdm` and `raritan-rfb`
-//! so both channels share one implementation.
 
 pub mod crypto;
 pub mod csc;

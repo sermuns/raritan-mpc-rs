@@ -1,8 +1,5 @@
-//! End-to-end video session orchestration shared by the CLI and GUI.
-//!
-//! This used to be copy-pasted between `raritan-cli` and `raritan-mpc`:
-//! fresh RDM login → credentials → background RDMEvent session (best
-//! effort) → plaintext RFB handshake → framebuffer pump.
+//! End-to-end video session orchestration shared by the CLI and GUI:
+//! RDM login → credentials → best-effort event session → RFB handshake → pump.
 
 use eyre::OptionExt;
 use raritan_rdm::{Port, RdmClient};
@@ -10,7 +7,6 @@ use raritan_rfb::{Framebuffer, PixelFormat, RfbStream};
 use std::net::TcpStream;
 use tracing::{debug, info, warn};
 
-/// Login triple for both the listing and the video RDM sessions.
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
     pub host: String,
@@ -18,17 +14,13 @@ pub struct ConnectionConfig {
     pub password: String,
 }
 
-/// Finds a port by index, id, id suffix, exact name, or name substring
-/// (same selector language as the CLI `--video` flag).
-///
-/// Precedence: exact index → exact id → exact name → id suffix → name
-/// substring. Empty selectors are rejected (they would otherwise match
-/// every port via `contains("")`).
+/// Finds a port by index, id, id suffix, exact name, or name substring.
+/// Precedence: exact index → id → name → id suffix → name substring.
+/// Empty selectors are rejected (they'd match everything).
 pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port> {
     if selector.is_empty() {
         eyre::bail!("empty port selector");
     }
-    // Exact matches first (deterministic, no ambiguity).
     if let Some(port) = ports.iter().find(|port| {
         port.index
             .is_some_and(|index| index.to_string() == selector)
@@ -37,8 +29,7 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
     }) {
         return Ok(port);
     }
-    // Fuzzy matches: id suffix or name substring. Collect all matches so
-    // ambiguous selectors fail loudly instead of picking port 0.
+    // Collect all fuzzy matches so ambiguity fails loudly instead of picking port 0.
     let fuzzy: Vec<&Port> = ports
         .iter()
         .filter(|port| {
@@ -56,9 +47,8 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
     }
 }
 
-/// Opens the full video path: fresh RDM session → credentials → best-effort
-/// RDMEvent session → RFB handshake. The TR grant (cmd 55) is deliberately
-/// skipped — the switch never answers it and RFB streams without it.
+/// Opens the full video path (RDM → credentials → event session → RFB).
+/// The TR grant (cmd 55) is skipped — the switch never answers it.
 pub fn establish_video(
     config: &ConnectionConfig,
     port_id: &str,
@@ -79,10 +69,9 @@ pub fn establish_video(
     let (session_id, session_key) = rdm
         .session_credentials()
         .map(|(id, key)| (id.to_owned(), key.to_owned()))?;
-    // The Java client always holds the event session while video runs;
-    // video works without it, so a failure only warns. The RFB handshake
-    // goes first so its update requests reach the switch ASAP; the event
-    // session then overlaps the switch's first-frame production.
+    // The Java client holds the event session while video runs; video works
+    // without it, so failures only warn. RFB goes first so its update
+    // requests reach the switch ASAP.
     info!(%port_id, "connecting RFB session");
     let mut rfb = RfbStream::connect_raritan(&config.host, &session_id, &session_key, port_id)?;
     info!(
@@ -96,10 +85,8 @@ pub fn establish_video(
         elapsed_ms = started.elapsed().as_millis(),
         "RDM event session done"
     );
-    // Clear any key state stuck down from an earlier session (e.g. a
-    // modifier held while the app lost focus or died): the switch keeps
-    // per-target key state across connections, so only the target can
-    // release it. Releases are no-ops for keys that aren't down.
+    // Clear key state stuck from an earlier session: the switch keeps
+    // per-target key state, so only the target can release it.
     rfb.release_all_keys()?;
     info!(
         elapsed_ms = started.elapsed().as_millis(),
@@ -108,23 +95,17 @@ pub fn establish_video(
     Ok(rfb)
 }
 
-/// Reads `n` framebuffer updates, applying each to a fresh RGB565
-/// framebuffer and re-requesting incrementally. Returns the framebuffer
-/// plus the set of encodings seen and total rect count.
-///
-/// Non-update messages (pings, OSD, commands) are consumed by the pump but
-/// do not count toward `n`: only messages that actually carry rectangles
-/// advance the capture.
+/// Reads `n` framebuffer updates into a fresh RGB565 framebuffer.
+/// Non-update messages don't count toward `n`; returns the framebuffer,
+/// encodings seen, and total rect count.
 pub fn capture_frames(
     rfb: &mut RfbStream<TcpStream>,
     n: usize,
 ) -> eyre::Result<(Framebuffer, std::collections::HashSet<i32>, usize)> {
-    // Bound headless captures: without a read timeout a stalled target
-    // would block `--frames N` forever (the GUI sets 100 ms).
+    // Bound headless captures: a stalled target would otherwise block forever.
     let previous_timeout = rfb.inner_read_timeout().unwrap_or(None);
     rfb.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
     let result = capture_frames_inner(rfb, n);
-    // Restore: ignore errors, the stream may be broken anyway.
     let _ = rfb.set_read_timeout(previous_timeout);
     result
 }
@@ -154,9 +135,7 @@ fn capture_frames_inner(
                 "first framebuffer update received"
             );
         }
-        // The switch can change resolutions mid-session (text mode ↔
-        // graphics on session start): a late 128 adopts new dimensions,
-        // and the pixel buffer must follow or rects clip/misalign.
+        // Late 128 changes dimensions: follow with the pixel buffer or rects misalign.
         let (width, height) = rfb
             .framebuffer_size()
             .ok_or_eyre("framebuffer dimensions lost")?;
@@ -192,7 +171,6 @@ pub fn encode_ppm(framebuffer: &Framebuffer) -> Vec<u8> {
     ppm
 }
 
-/// True when every byte is zero (nothing was ever painted).
 pub fn is_black(framebuffer: &Framebuffer) -> bool {
     framebuffer.rgba.iter().all(|b| *b == 0)
 }

@@ -1,9 +1,8 @@
 //! Exposes the git commit to the UI via `VERGEN_GIT_*` env vars.
 //!
-//! Hand-rolled instead of vergen-gitcl (which drags ~30 crates, incl. a
-//! second syn, just to shell out to git): all we need is `rev-parse HEAD`
-//! plus a dirty check. Outside a git checkout the variables stay unset
-//! and the UI falls back to placeholders.
+//! Hand-rolled instead of vergen-gitcl (~30 extra crates just to shell out
+//! to git): outside a checkout the vars stay unset and the UI falls back
+//! to placeholders.
 
 use std::path::PathBuf;
 
@@ -29,8 +28,7 @@ fn head_file() -> Option<PathBuf> {
 
 fn main() {
     // Re-run when the commit changes: HEAD moves on branch switch, the
-    // branch ref moves on new commits. (Package files trigger rebuilds
-    // anyway; this covers metadata-only commits.)
+    // branch ref on new commits.
     if let Some(head) = head_file() {
         println!("cargo:rerun-if-changed={}", head.display());
         if let Some(ref_path) = std::fs::read_to_string(&head)

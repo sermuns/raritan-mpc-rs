@@ -1,7 +1,6 @@
 //! Small XML helpers (attribute lookup + escaping).
 
-/// Naive `name="value"` lookup. Good enough for the tiny CSC challenge
-/// documents; full parsing lives in `raritan-rdm::model`.
+/// Naive `name="value"` lookup, enough for the tiny CSC challenge documents.
 pub fn xml_attribute(xml: &str, name: &str) -> Option<String> {
     let marker = format!("{name}=\"");
     let start = xml.find(&marker)? + marker.len();
@@ -9,10 +8,7 @@ pub fn xml_attribute(xml: &str, name: &str) -> Option<String> {
     Some(xml[start..end].to_owned())
 }
 
-/// XML-escapes a value for embedding in CSC request documents.
-///
-/// Delegates to [`quick_xml::escape::escape`] (already a workspace
-/// dependency) so there is exactly one escaping implementation.
+/// XML-escapes a value for CSC requests (via quick_xml, the single implementation).
 pub fn escape_xml(value: &str) -> String {
     quick_xml::escape::escape(value).into_owned()
 }

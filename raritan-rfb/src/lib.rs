@@ -2,10 +2,6 @@
 //!
 //! Reference: decompiled `nn.pp.rccore.impl.rfb.*` plus a decrypted
 //! capture of the Java client. See `docs/rfb.md` for the byte-level map.
-//!
-//! Layout: [`proto`] (message types), [`framebuffer`] (Raw decode +
-//! pixel buffer), [`lrle`] (LRLE tiles), [`transport`] (TCP/TLS setup),
-//! [`handshake`], [`pump`].
 
 pub mod framebuffer;
 pub mod handshake;
@@ -47,9 +43,8 @@ mod tests {
         assert_eq!(update.rectangles[1].width, 4);
     }
 
-    /// A `FixColourMapEntries` (sent when the target drops to a
-    /// palettized mode, e.g. during reboot) must not kill the pump:
-    /// it is skipped and the next update still parses.
+    /// Type 1 (palettized reboot screens) must not kill the pump:
+    /// skipped, with the next update still parsing.
     #[test]
     fn pump_survives_colour_map() {
         let mut server = vec![1, 0]; // type 1 + pad
@@ -197,8 +192,7 @@ mod tests {
         framebuffer
             .apply_update(&update, PixelFormat::RGB565)
             .unwrap();
-        // Every pixel carries an opaque alpha (last byte) once painted;
-        // the untouched background stays zero.
+        // Painted pixels carry opaque alpha; background stays zero.
         let painted = framebuffer
             .rgba
             .chunks_exact(4)

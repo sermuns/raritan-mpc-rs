@@ -88,7 +88,6 @@ impl RdmClient {
         })
     }
 
-    /// Identity of the connected switch, from the `<CSC_Info>` payload.
     pub fn switch_info(&self) -> &SwitchInfo {
         &self.switch_info
     }
@@ -106,9 +105,8 @@ impl RdmClient {
         self.database_query(SELECT_IP_REACH_PORTS)
     }
 
-    /// Fetches just the session credentials (one query). Used by the
-    /// video path, which needs no port inventory — `enumerate_ports`
-    /// would waste several round trips here.
+    /// Fetches just the session credentials (one query): the video path
+    /// needs no port inventory.
     pub fn fetch_session_credentials(&mut self) -> eyre::Result<()> {
         info!("requesting RDM session credentials");
         let session: SessionResponse = from_str(&self.database_query(SELECT_SESSION_ID)?)?;
@@ -132,9 +130,8 @@ impl RdmClient {
 
         let inventory = self.database_query(SELECT_IP_REACH_PORTS)?;
         let ports = parse_ports(&inventory)?;
-        // Fan out to each distinct connected device once (N ports on the
-        // same D_… device share one query). Guard against self-references
-        // and cycles by skipping already-seen ids.
+        // Fan out once per distinct connected device (ports on one device
+        // share a query); skip seen ids to guard against cycles.
         let mut seen_devices = std::collections::HashSet::new();
         let mut connections: Vec<String> = Vec::new();
         for port in &ports {
@@ -180,11 +177,9 @@ impl RdmClient {
         ))
     }
 
-    /// Opens the RDMEvent referral session the Java client always holds
-    /// while connecting video: fresh `:5000` connection, `StartSession`
-    /// with `RDMEvent` + our session ID, TLS upgrade, then the RC4
-    /// `CSC_Test2` dance keyed by the RDM session key. The stream is
-    /// drained in the background (mirrors Java's always-on event loop).
+    /// Opens the RDMEvent referral session the Java client holds while
+    /// connecting video: `:5000` → `StartSession(RDMEvent)` → TLS → RC4
+    /// `CSC_Test2`. Drained in the background like Java's event loop.
     pub fn open_event_session(&self, session_id: &str, session_key: &str) -> eyre::Result<()> {
         info!(%session_id, "opening RDM event session");
         let mut socket = Self::tcp_connect(&self.host)?;
@@ -192,10 +187,8 @@ impl RdmClient {
         let mut tls = Self::tls_upgrade(&self.host, socket)?;
         csc_test2(&mut tls, session_key)?;
         info!("RDM event session established");
-        // NOTE: this spawns a detached drain thread that owns the event
-        // socket for the lifetime of the video session (mirrors Java's
-        // always-on event loop). Callers that retry `establish_video`
-        // should be aware each attempt opens one more session.
+        // NOTE: detached drain thread owns the event socket, so each
+        // `establish_video` attempt opens one more session.
         std::thread::spawn(move || {
             if let Err(error) = tls.get_ref().set_read_timeout(Some(EVENT_DRAIN_TIMEOUT)) {
                 info!(error = %format!("{error:#}"), "RDM event drain: cannot set read timeout; exiting");
@@ -209,8 +202,7 @@ impl RdmClient {
                         "RDM event",
                     ),
                     Err(error) => {
-                        // Walk the eyre chain: SslStream errors may wrap the
-                        // underlying io error instead of exposing it directly.
+                        // SslStream may wrap the io error instead of exposing it directly.
                         let idle = error
                             .chain()
                             .find_map(|cause| cause.downcast_ref::<std::io::Error>())
@@ -231,9 +223,7 @@ impl RdmClient {
         Ok(())
     }
 
-    /// Sends TR PINGs and waits briefly for a PONG, purely to check
-    /// whether the server's TR layer processes our binary commands.
-    /// Returns true if any response arrived.
+    /// Sends TR PINGs to check whether the server's TR layer answers.
     pub fn probe_ping(&mut self) -> bool {
         let answered = tr_probe_ping(&mut self.stream);
         let _ = self
@@ -243,8 +233,8 @@ impl RdmClient {
         answered
     }
 
-    /// Legacy TR video-stream grant (cmd 55). Utterly silent on current
-    /// firmware — kept for debugging only; the RFB path skips it.
+    /// Legacy TR video-stream grant (cmd 55), silent on current firmware;
+    /// kept for debugging only (the RFB path skips it).
     pub fn connect_video_stream(
         &mut self,
         portal: &str,

@@ -1,11 +1,6 @@
-//! Legacy binary TR layer (diagnostics only).
-//!
-//! The RFB video path intentionally bypasses the TR video-stream grant
-//! (cmd 55): the switch never answers it, and video works without it
-//! (see `docs/rdm.md`). These helpers remain for capture-time debugging:
-//! `probe_ping` checks the TR layer is alive, `request_video_grant`
-//! sends the byte-identical Java `TRVideoStream.connectVideoStream`
-//! request and waits for grant 37.
+//! Legacy binary TR layer (diagnostics only): the RFB path bypasses the
+//! video-stream grant (cmd 55, never answered). `probe_ping` checks the TR
+//! layer is alive; `request_video_grant` sends the byte-identical Java request.
 
 use eyre::{Context, OptionExt, bail};
 use openssl::ssl::SslStream;
@@ -16,7 +11,6 @@ use std::{
 };
 use tracing::{debug, info};
 
-/// TR command numbers.
 pub const TR_PING: u8 = 3;
 pub const TR_PING_ALT: u8 = 2;
 pub const TR_CONNECT_VIDEO_STREAM: u8 = 55;
@@ -36,7 +30,7 @@ pub fn read_tr_command(stream: &mut SslStream<TcpStream>) -> eyre::Result<Vec<u8
     Ok(command)
 }
 
-/// Sends TR PINGs with several packet IDs; true if any response arrived.
+/// Sends TR PINGs with several packet IDs.
 pub fn probe_ping(stream: &mut SslStream<TcpStream>) -> bool {
     let _ = stream
         .get_ref()

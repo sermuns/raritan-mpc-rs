@@ -62,10 +62,8 @@ impl PortDocument {
     }
 }
 
-/// Switch identity from the pre-TLS `<CSC_Info>` payload: device
-/// attributes plus the named child elements (`Name`, `Hostname`,
-/// `IPAddress`). All optional — firmware varies, and a missing field
-/// must never break the connection.
+/// Switch identity from `<CSC_Info>`. All fields optional: firmware varies,
+/// and a missing field must never break the connection.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct SwitchInfo {
@@ -92,8 +90,7 @@ struct CscInfo {
     device: Option<SwitchInfo>,
 }
 
-/// Parses `<CSC_Info>` into [`SwitchInfo`]; unparseable payloads yield
-/// an empty struct instead of an error.
+/// Parses `<CSC_Info>`; unparseable payloads yield an empty struct, never an error.
 pub(crate) fn parse_switch_info(xml: &str) -> SwitchInfo {
     from_str::<CscInfo>(xml)
         .map(|info| info.device.unwrap_or_default())

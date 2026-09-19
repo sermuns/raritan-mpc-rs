@@ -1,7 +1,4 @@
-//! Framebuffer model: Raw decoding plus dispatch into the LRLE decoder.
-//!
-//! LRLE internals live in [`crate::lrle`]; this module owns the pixel
-//! buffer and the Raw path.
+//! Framebuffer model: pixel buffer, Raw decoding, dispatch to the LRLE decoder.
 
 use crate::lrle::decode_lrle_rect;
 use crate::proto::{
@@ -67,7 +64,6 @@ pub struct Framebuffer {
 pub const MAX_FRAMEBUFFER_BYTES: usize = 64 * 1024 * 1024;
 
 impl Framebuffer {
-    /// Validated constructor: rejects zero dimensions and oversize buffers.
     pub fn try_new(width: u16, height: u16) -> Result<Self> {
         if width == 0 || height == 0 {
             bail!("invalid framebuffer dimensions: {width}x{height}");
@@ -147,8 +143,7 @@ impl Framebuffer {
         Ok(())
     }
 
-    /// Paints one `0xAARRGGBB` pixel (the Java int-pixel convention used
-    /// by all decoder tables) into the RGBA buffer.
+    /// Paints one `0xAARRGGBB` pixel (Java int-pixel convention) into the RGBA buffer.
     pub(crate) fn put_pixel(&mut self, x: usize, y: usize, color: u32) {
         if x >= self.width as usize || y >= self.height as usize {
             return;
@@ -173,9 +168,8 @@ pub fn rgb(value: u32, format: PixelFormat) -> u32 {
 mod tests {
     use super::*;
 
-    /// Guards the buffer byte order: a raw RGB565 red + blue pair must
-    /// land as RGBA bytes (egui/PPM read R,G,B,A in order). Storing the
-    /// native `0xAARRGGBB` int directly tints everything red.
+    /// Guards the RGBA byte order: storing the native `0xAARRGGBB` int
+    /// directly would tint everything red.
     #[test]
     fn pixels_are_stored_in_rgba_order() {
         let mut framebuffer = Framebuffer::new(2, 1);

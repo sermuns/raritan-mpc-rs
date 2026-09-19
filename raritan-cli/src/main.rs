@@ -90,9 +90,6 @@ fn main() -> color_eyre::Result<()> {
     let port_id = port.id.clone();
     drop(client);
 
-    // NOTE: the TR video-stream grant (cmd 55) is intentionally skipped:
-    // the switch never answers it, while RFB streams fine without it.
-    // `establish_video` also holds the RDMEvent session like Java does.
     let config = ConnectionConfig {
         host: args.host.clone(),
         user: args.user.clone(),

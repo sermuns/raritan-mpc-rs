@@ -33,8 +33,8 @@ impl<S: Read + Write> RfbStream<S> {
         debug!("RFB protocol version negotiated");
         self.stream.write_all(b"e-RIC RFB 01.29\n")?;
 
-        // RfbAuthCapsMsgV01_22 + RfbAuthenticatorV01_22: require the
-        // RDM-session method and log in as "super".
+        // RfbAuthCapsMsgV01_22 + RfbAuthenticatorV01_22: require
+        // RDM-session, log in as "super".
         let auth_type = read_u8(&mut self.stream)?;
         if auth_type != AUTH_CAPS {
             bail!("expected RFB auth capabilities, got {auth_type}");
@@ -71,10 +71,8 @@ impl<S: Read + Write> RfbStream<S> {
         self.stream.write_all(session_bytes)?;
         self.stream.flush()?;
 
-        // Event loop: the server interleaves auth-ok, connection
-        // parameters, UTF-8 welcome, server-init, OSD, keyboard layout,
-        // server commands, USB profiles, ... before the 128
-        // framebuffer-format message that ends the handshake.
+        // Event loop: the server interleaves auth-ok, params, welcome,
+        // server-init, OSD, ... before the 128 format message ends it.
         loop {
             let message_type = read_u8(&mut self.stream)?;
             trace!(message_type, "received RFB handshake message");
@@ -114,16 +112,13 @@ impl<S: Read + Write> RfbStream<S> {
                     self.write_pointer_event(0, 0, 0, 0)?;
                     self.write_set_connection_parameter("current_mouse_mode", "absolute")?;
                     self.write_ping_request(0)?;
-                    // We decode Raw rects with the negotiated format, so
-                    // return what is actually in force (RGB565), not the
-                    // server's announcement.
+                    // Return the format actually in force (RGB565), not the announcement.
                     return Ok(PixelFormat::RGB565);
                 }
                 FRAMEBUFFER_UPDATE => {
                     let update = self.read_framebuffer_update()?;
                     warn!("received framebuffer update during handshake; stashing");
-                    // Bound the stash: a malicious server could flood type 0
-                    // before 128 and OOM us.
+                    // Bound the stash against a server flooding type 0 before 128.
                     if self.pending_updates.len() >= 64 {
                         bail!("too many early framebuffer updates during handshake");
                     }

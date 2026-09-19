@@ -1,8 +1,6 @@
-//! `CSC_Test2` challenge/response for the RDMEvent session.
-//!
-//! Mirrors `CSCConnect.CSC_Test` from the Java client: the server sends a
-//! base64 `ClearText` challenge, we RC4 it with the session key and reply
-//! with both the encrypted challenge and a time-XORed probe; the server
+//! `CSC_Test2` challenge/response for the RDMEvent session, mirroring
+//! `CSCConnect.CSC_Test`: the server sends a base64 `ClearText` challenge,
+//! we RC4 it with the session key plus a time-XORed probe; the server
 //! echoes our probe back encrypted.
 
 use eyre::{Context, OptionExt, bail};
@@ -12,7 +10,7 @@ use raritan_common::{
 use std::io::{Read, Write};
 use tracing::debug;
 
-/// Completes the `CSC_Test2` dance on an already-TLS-upgraded stream.
+/// Requires an already-TLS-upgraded stream.
 pub fn csc_test2<S: Read + Write>(tls: &mut S, session_key: &str) -> eyre::Result<()> {
     let challenge = String::from_utf8(read_frame(tls).wrap_err("reading event CSC challenge")?)?;
     let clear_text = xml_attribute(&challenge, "ClearText")

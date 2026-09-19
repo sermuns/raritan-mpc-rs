@@ -20,28 +20,23 @@ impl RfbStream<TcpStream> {
     pub fn connect(host: &str) -> Result<Self> {
         let stream = TcpStream::connect((host, DEFAULT_RFB_PORT))
             .wrap_err_with(|| format!("connecting to {host}:{DEFAULT_RFB_PORT}"))?;
-        // Latency-sensitive channel (4-byte key events, 10-byte update
-        // requests): disable Nagle so small writes go out immediately
-        // instead of waiting up to ~200 ms for delayed ACKs.
+        // Latency-sensitive small writes: disable Nagle (else ~200 ms delayed ACKs).
         stream.set_nodelay(true)?;
         Ok(Self::new(stream))
     }
 
-    /// Sets the socket read timeout. The GUI worker uses a short timeout
-    /// so it can interleave outbound key events with the blocking message
-    /// pump; timeouts surface as `TimedOut`/`WouldBlock` io errors.
+    /// Read timeout; expiry surfaces as `TimedOut`/`WouldBlock` so the GUI
+    /// can interleave outbound key events with the blocking pump.
     pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> Result<()> {
         self.stream.set_read_timeout(timeout)?;
         Ok(())
     }
 
-    /// Current socket read timeout (used to save/restore around captures).
     pub fn inner_read_timeout(&self) -> Result<Option<std::time::Duration>> {
         Ok(self.stream.read_timeout()?)
     }
 
-    /// Plaintext video channel on 443, as used by the Java client
-    /// (`RemoteConsoleParameters.ssl == false`).
+    /// Plaintext video channel (the Java default: `ssl == false`).
     pub fn connect_raritan(
         host: &str,
         session_id: &str,
@@ -65,8 +60,7 @@ impl RfbStream<TcpStream> {
         Ok(stream)
     }
 
-    /// Legacy CSC + TLS + RC4 channel setup, kept for setups that require
-    /// SSL. The default Java video path is plaintext (see `connect_raritan`).
+    /// Legacy CSC + TLS + RC4 setup, for switches requiring SSL.
     fn connect_tls_channel(host: &str, session_id: &str) -> Result<SslStream<TcpStream>> {
         info!(%host, "connecting to RFP CSC channel");
         let mut socket = TcpStream::connect((host, DEFAULT_RFB_PORT))
@@ -108,8 +102,7 @@ impl<S: Read + Write> RfbStream<S> {
         self.stream
     }
 
-    /// Framebuffer update request for the full framebuffer area, matching
-    /// `RfbFramebufferUpdateRequestMsgV01_22`: `[3, incr, x, y, w, h]`.
+    /// Full-area update request (`RfbFramebufferUpdateRequestMsgV01_22`).
     pub fn request_framebuffer_update(&mut self, incremental: bool) -> Result<()> {
         let (width, height) = self
             .framebuffer_size

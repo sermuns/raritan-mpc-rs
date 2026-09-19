@@ -6,9 +6,8 @@ use raritan_common::{display_xml, read_frame, write_frame};
 use std::io::{Read, Write};
 use tracing::debug;
 
-/// Performs the pre-TLS CSC exchange on a fresh `:5000` socket and sends
-/// a `CSC_Start_Session` for the given protocol (`RDM` / `RDMEvent`).
-/// Returns the `<CSC_Info>` payload for callers that log it.
+/// Pre-TLS CSC exchange + `CSC_Start_Session` for the protocol; returns
+/// the `<CSC_Info>` payload.
 pub fn csc_start_session<S: Read + Write>(
     stream: &mut S,
     protocol: &str,
@@ -36,7 +35,6 @@ pub fn csc_start_session<S: Read + Write>(
     Ok(info)
 }
 
-/// Sends `<CSC_Auth>` and expects `<CSC_Pass/>`.
 pub fn csc_auth<S: Read + Write>(tls: &mut S, user: &str, password: &str) -> eyre::Result<()> {
     write_frame(
         tls,

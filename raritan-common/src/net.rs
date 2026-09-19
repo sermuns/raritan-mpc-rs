@@ -7,11 +7,8 @@ pub const DEFAULT_RDM_PORT: u16 = 5000;
 /// RFB video channel (usually plaintext) + short TLS sessions.
 pub const DEFAULT_RFB_PORT: u16 = 443;
 
-/// Normal RDM read timeout.
 pub const RDM_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the legacy TR grant waits (Java `TRRSP::CONNECT_TIMEOUT` ≈ 20 s).
 pub const TR_GRANT_TIMEOUT: Duration = Duration::from_secs(25);
-/// Idle timeout for the background RDM-event drain thread.
 pub const EVENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
-/// Per-read timeout while waiting for the TR grant.
 pub const TR_GRANT_POLL_TIMEOUT: Duration = Duration::from_secs(5);
