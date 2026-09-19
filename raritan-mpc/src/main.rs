@@ -498,8 +498,9 @@ fn run_video_session(
     // NOTE: the TR video-stream grant (cmd 55) is skipped (never
     // answered; RFB streams without it). `establish_video` also holds
     // the RDM event session.
-    let mut rfb = establish_video(config, port_id)?;
+    let mut session = establish_video(config, port_id)?;
     status("RFB connected; waiting for framebuffer");
+    let rfb = &mut session.rfb;
     let (width, height) = rfb
         .framebuffer_size()
         .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
@@ -513,6 +514,10 @@ fn run_video_session(
     let mut dropped_frames: u64 = 0;
     let result = (|| -> eyre::Result<()> {
         loop {
+            // The switch reaps idle sessions: RFB ping every 20 s, RDM
+            // query every 29 s, like the Java client.
+            session.keepalive()?;
+            let rfb = &mut session.rfb;
             // Drain all queued input first; every event goes through, never dropped.
             loop {
                 match cmd_receiver.try_recv() {
@@ -592,6 +597,7 @@ fn run_video_session(
             rfb.request_framebuffer_update(true)?;
         }
     })();
+    let rfb = &mut session.rfb;
     for eric in held {
         let _ = rfb.write_key_event(eric, false);
     }

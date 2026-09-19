@@ -35,6 +35,12 @@ No TR grant is used (see [RDM](rdm.md#the-tr-video-stream-grant)). The flow is:
    format → session-init tail.
 3. Steady state: read server messages (updates, pings, OSD, commands…),
    apply framebuffer updates, send incremental full-area update requests.
+   The main RDM connection stays open for the whole session
+   (`VideoSession`), with keepalives like the Java client: an RFB ping
+   request every 20 s (`PingTimer`) and a `GET_DEVICE_ID` database query
+   on the RDM channel every 29 s (`TRKeepAliveThread` / event loop).
+   Without these the switch reaps the session: the `RDMEvent` socket
+   closes first, then the RFB stream.
 
 ## What the Java client does differently (and why it doesn't matter)
 
