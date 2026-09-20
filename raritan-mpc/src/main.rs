@@ -1437,12 +1437,22 @@ impl eframe::App for MpcApp {
                     );
                     ui.horizontal(|ui| {
                         let busy = self.port_refresh.is_some();
+                        let connected = self.switch_info.is_some();
+                        let (label, hover) = if connected {
+                            ("× Disconnect", "Drop the video session and forget this switch")
+                        } else {
+                            ("🔌 Connect", "Enumerate ports on the switch above")
+                        };
                         if ui
-                            .add_enabled(!busy, egui::Button::new("🔌 Connect"))
-                            .on_hover_text("Enumerate ports on the switch above")
+                            .add_enabled(!busy, egui::Button::new(label))
+                            .on_hover_text(hover)
                             .clicked()
                         {
-                            self.reconnect();
+                            if connected {
+                                self.disconnect_switch();
+                            } else {
+                                self.reconnect();
+                            }
                         }
                         if ui
                             .add_enabled(!busy, egui::Button::new("↻ Refresh"))
@@ -1454,28 +1464,6 @@ impl eframe::App for MpcApp {
                     });
                     ui.checkbox(&mut self.auto_refresh, "Auto-refresh ports")
                         .on_hover_text("Re-enumerate ports every 30 seconds");
-                    // Connected switch identity (CSC_Info); cloned since Disconnect mutates `self`.
-                    if let Some(info) = self.switch_info.clone() {
-                        ui.separator();
-                        ui.label(format!(
-                            "{} ({})",
-                            info.name.as_deref().unwrap_or("Switch"),
-                            info.model.as_deref().unwrap_or("unknown model"),
-                        ));
-                        if let Some(version) = &info.version {
-                            ui.small(format!("Firmware {version}"));
-                        }
-                        if let Some(address) = &info.ip_address {
-                            ui.small(address);
-                        }
-                        if ui
-                            .button("× Disconnect switch")
-                            .on_hover_text("Drop the video session and forget this switch")
-                            .clicked()
-                        {
-                            self.disconnect_switch();
-                        }
-                    }
                     ui.separator();
                     ui.heading("Ports");
                     ui.horizontal(|ui| {
