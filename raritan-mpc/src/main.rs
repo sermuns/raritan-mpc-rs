@@ -1248,7 +1248,12 @@ impl eframe::App for MpcApp {
                     should_close = true;
                 }
                 ui.set_width(520.0);
-                ui.small(egui::RichText::new("↑/↓ navigate | Enter: run | Esc: close | F1 / Ctrl+P: toggle").monospace());
+                ui.label(
+                    egui::RichText::new("↑/↓ navigate | Enter: run | Esc: close | F1 / Ctrl+P: toggle")
+                        .family(egui::FontFamily::Monospace)
+                        .small()
+                        .weak(),
+                );
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut self.palette_query)
                         .hint_text("Type to filter…")
