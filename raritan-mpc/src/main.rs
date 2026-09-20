@@ -1243,14 +1243,7 @@ impl eframe::App for MpcApp {
             let mut should_execute: Option<usize> = None;
             // We need filtered for rendering, but query may change inside modal.
             // Recompute inside modal after editing palette_query directly to avoid one-frame lag.
-            // Top-anchored window (VSCode-like) — horizontally centered, 80px from top
-            egui::Window::new("palette_modal")
-                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 80.0))
-                .collapsible(false)
-                .resizable(false)
-                .title_bar(false)
-                .movable(false)
-                .show(ui.ctx(), |ui| {
+            egui::containers::Modal::new("palette_modal".into()).show(ui.ctx(), |ui| {
                 if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                     should_close = true;
                 }
