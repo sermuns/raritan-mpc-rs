@@ -1513,11 +1513,11 @@ impl eframe::App for MpcApp {
                                             port.name.as_deref().unwrap_or(&port.id).to_owned();
                                         let label = if port.is_busy() {
                                             format!(
-                                                "{}  {name} (in use)",
+                                                "{:>2}  {name} (in use)",
                                                 port.display_index(),
                                             )
                                         } else {
-                                            format!("{}  {}", port.display_index(), name)
+                                            format!("{:>2}  {}", port.display_index(), name)
                                         };
                                         let selected = self.selected_port == Some(index);
                                         let selected_port = port.clone();
