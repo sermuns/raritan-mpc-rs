@@ -180,6 +180,7 @@ struct MpcApp {
     confirm_cad: bool,
     paste_open: bool,
     paste_text: String,
+    tty_fn: u8,
     /// Last frame's image rect, for mapping pointer to target pixels.
     viewport: Option<egui::Rect>,
     /// Held mouse buttons (RFB mask).
@@ -277,6 +278,7 @@ impl MpcApp {
             confirm_cad: false,
             paste_open: false,
             paste_text: String::new(),
+            tty_fn: 2,
             viewport: None,
             mouse_buttons: 0,
             last_pointer: None,
@@ -758,25 +760,32 @@ fn map_pointer(viewport: egui::Rect, size: (u16, u16), pos: egui::Pos2) -> Optio
     ))
 }
 
-/// Ctrl+Alt+Delete via the `en_US` Eric table: presses in order, releases reversed.
-fn cad_sequence() -> Vec<VideoCommand> {
-    let held: Vec<u16> = [(17, 2), (18, 2), (127, 1)]
-        .into_iter()
-        .filter_map(|(code, location)| eric_code(code, location))
+fn chord_sequence(codes: &[(i32, i32)]) -> Vec<VideoCommand> {
+    let held: Vec<u16> = codes
+        .iter()
+        .filter_map(|&(code, loc)| eric_code(code, loc))
         .collect();
-    if held.len() != 3 {
+    if held.len() != codes.len() {
         return Vec::new();
     }
-    let mut sequence: Vec<VideoCommand> = held
+    let mut seq: Vec<VideoCommand> = held
         .iter()
         .map(|&eric| VideoCommand::Key { eric, down: true })
         .collect();
-    sequence.extend(
-        held.iter()
-            .rev()
-            .map(|&eric| VideoCommand::Key { eric, down: false }),
-    );
-    sequence
+    seq.extend(held.iter().rev().map(|&eric| VideoCommand::Key { eric, down: false }));
+    seq
+}
+
+/// Ctrl+Alt+Delete via the `en_US` Eric table: presses in order, releases reversed.
+fn cad_sequence() -> Vec<VideoCommand> {
+    chord_sequence(&[(17, 2), (18, 2), (127, 1)])
+}
+
+fn tty_sequence(n: u8) -> Vec<VideoCommand> {
+    if !(1..=12).contains(&n) {
+        return Vec::new();
+    }
+    chord_sequence(&[(17, 2), (18, 2), (112 + i32::from(n) - 1, 1)])
 }
 
 /// Converts pasted text to a sequence of Eric key press/release pairs,
@@ -1356,10 +1365,24 @@ impl eframe::App for MpcApp {
                             {
                                 self.start_video(&port);
                             }
-                            if ui.button("📋 Paste").on_hover_text("Paste text as keystrokes to the selected port").clicked() {
+                            if ui.button("⌨ Paste text").on_hover_text("Paste text as keystrokes to the selected port").clicked() {
                                 self.paste_text.clear();
                                 self.paste_open = true;
                             }
+                            egui::ComboBox::from_id_salt("tty_combo")
+                                .selected_text("🖥 Change TTY")
+                                .show_ui(ui, |ui| {
+                                    for n in 1..=12 {
+                                        let label = format!("F{n}  Ctrl+Alt+F{n}");
+                                        if ui.selectable_value(&mut self.tty_fn, n, &label).clicked()
+                                            && let Some(tx) = &self.cmd_tx
+                                        {
+                                            for command in tty_sequence(n) {
+                                                let _ = tx.send(command);
+                                            }
+                                        }
+                                    }
+                                });
                             if ui.button("⌨ Ctrl+Alt+Del").clicked() {
                                 self.confirm_cad = true;
                             }
@@ -1404,6 +1427,9 @@ impl eframe::App for MpcApp {
                 // Confirm the Secure Attention Sequence before sending.
                 if self.confirm_cad {
                     egui::containers::Modal::new("cad_confirm".into()).show(ui.ctx(), |ui| {
+                        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.confirm_cad = false;
+                        }
                         ui.heading("Send Ctrl+Alt+Delete?");
                         ui.label("Send Ctrl+Alt+Delete to the selected port?");
                         ui.horizontal(|ui| {
@@ -1423,12 +1449,16 @@ impl eframe::App for MpcApp {
                 }
                 if self.paste_open {
                     egui::containers::Modal::new("paste_modal".into()).show(ui.ctx(), |ui| {
+                        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.paste_open = false;
+                        }
+                        ui.set_width(420.0);
                         ui.heading("Paste text as keystrokes");
-                        ui.label("Text will be typed into the selected port, character by character. Use for passwords etc. (original client has this).");
+                        ui.label("Text will be typed into the selected port, character by character.");
                         let edit = egui::TextEdit::multiline(&mut self.paste_text)
                             .hint_text("Paste text here…")
-                            .desired_width(360.0)
-                            .desired_rows(4);
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(6);
                         ui.add(edit);
                         ui.horizontal(|ui| {
                             let can_send = !self.paste_text.is_empty() && self.cmd_tx.is_some();
@@ -1444,10 +1474,6 @@ impl eframe::App for MpcApp {
                                 self.paste_open = false;
                             }
                         });
-                        if !self.paste_text.is_empty() {
-                            let count = paste_sequence(&self.paste_text).len() / 2;
-                            ui.small(format!("{count} keystrokes will be sent"));
-                        }
                     });
                 }
                 if let Some(texture) = &self.texture {
