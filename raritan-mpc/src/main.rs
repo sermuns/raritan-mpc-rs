@@ -1,5 +1,9 @@
 use clap::Parser;
 use eframe::egui;
+use nucleo::{
+    Config as NucleoConfig, Matcher, Utf32Str,
+    pattern::{CaseMatching, Normalization, Pattern},
+};
 use raritan_rdm::{Port, SwitchInfo};
 use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
 use raritan_session::{Cancelled, ConnectionConfig, ControlLink, PortsResult, connect_video};
@@ -192,6 +196,9 @@ struct MpcApp {
     /// Manual video action awaiting resumed frames; cleared by the next
     /// decoded frame (the switch pauses the stream while working).
     pending_video_action: Option<String>,
+    palette_open: bool,
+    palette_query: String,
+    palette_selected: usize,
 }
 
 /// GUI ↔ video-worker flags. `cancel` stops a superseded connect between
@@ -279,6 +286,9 @@ impl MpcApp {
             paste_open: false,
             paste_text: String::new(),
             tty_fn: 2,
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
             viewport: None,
             mouse_buttons: 0,
             last_pointer: None,
@@ -312,6 +322,7 @@ impl MpcApp {
         self.selected_port = None;
         self.confirm_cad = false;
         self.paste_open = false;
+        self.palette_open = false;
     }
 
     fn start_video(&mut self, port: &Port) {
@@ -871,6 +882,123 @@ fn paste_char_to_java(ch: char) -> Option<(i32, i32, bool)> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PaletteAction {
+    ConnectPort(usize),
+    DisconnectVideo,
+    ReconnectVideo,
+    Paste,
+    ChangeTty(u8),
+    Cad,
+    AutoAdjust,
+    Calibrate,
+    ToggleSidebar,
+    RefreshPorts,
+    ConnectSwitch,
+    DisconnectSwitch,
+}
+
+impl MpcApp {
+    fn palette_entries(&self) -> Vec<(String, PaletteAction)> {
+        let mut items = Vec::new();
+        // Ports — fuzzy connect (same 🔌 as KVM Connect button)
+        for idx in self.port_order() {
+            if let Some(port) = self.ports.get(idx) {
+                let name = port.name.as_deref().unwrap_or(&port.id);
+                let label = format!("🔌 Connect to port {} - {}", port.display_index(), name);
+                items.push((label, PaletteAction::ConnectPort(idx)));
+            }
+        }
+        // Video / input actions (available when video session exists, but show always with hint)
+        if self.cmd_tx.is_some() {
+            items.push((String::from("⌨ Paste text — type clipboard as keystrokes"), PaletteAction::Paste));
+            for n in 1..=12 {
+                items.push((format!("🖥 Change TTY — Ctrl+Alt+F{n}"), PaletteAction::ChangeTty(n)));
+            }
+            items.push((String::from("⌨ Send Ctrl+Alt+Delete"), PaletteAction::Cad));
+            items.push((String::from("◎ Auto-adjust video"), PaletteAction::AutoAdjust));
+            items.push((String::from("🎨 Calibrate color"), PaletteAction::Calibrate));
+            items.push((String::from("× Disconnect video"), PaletteAction::DisconnectVideo));
+            items.push((String::from("↻ Reconnect video"), PaletteAction::ReconnectVideo));
+        }
+        // Switch / sidebar
+        items.push((String::from("↻ Refresh ports"), PaletteAction::RefreshPorts));
+        items.push((String::from("◀ Toggle sidebar"), PaletteAction::ToggleSidebar));
+        if self.switch_info.is_some() {
+            items.push((String::from("× Disconnect switch"), PaletteAction::DisconnectSwitch));
+        } else {
+            items.push((String::from("🔌 Connect to switch"), PaletteAction::ConnectSwitch));
+        }
+        items
+    }
+
+    fn execute_palette(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::ConnectPort(idx) => {
+                if let Some(port) = self.ports.get(idx).cloned() {
+                    self.selected_port = Some(idx);
+                    self.start_video(&port);
+                }
+            }
+            PaletteAction::DisconnectVideo => self.disconnect_video(),
+            PaletteAction::ReconnectVideo => {
+                if let Some(idx) = self.selected_port
+                    && let Some(port) = self.ports.get(idx).cloned()
+                {
+                    self.start_video(&port);
+                }
+            }
+            PaletteAction::Paste => {
+                self.paste_text.clear();
+                self.paste_open = true;
+            }
+            PaletteAction::ChangeTty(n) => {
+                if let Some(tx) = &self.cmd_tx {
+                    for cmd in tty_sequence(n) {
+                        let _ = tx.send(cmd);
+                    }
+                }
+            }
+            PaletteAction::Cad => self.confirm_cad = true,
+            PaletteAction::AutoAdjust => {
+                if let Some(tx) = &self.cmd_tx {
+                    let _ = tx.send(VideoCommand::VideoSettings { setting: 18, value: 0 });
+                    self.pending_video_action = Some(String::from("Auto-sensing video…"));
+                }
+            }
+            PaletteAction::Calibrate => {
+                if let Some(tx) = &self.cmd_tx {
+                    let _ = tx.send(VideoCommand::VideoSettings { setting: 19, value: 0 });
+                    self.pending_video_action = Some(String::from("Calibrating color…"));
+                }
+            }
+            PaletteAction::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            PaletteAction::RefreshPorts => self.refresh_ports(),
+            PaletteAction::ConnectSwitch => self.reconnect(),
+            PaletteAction::DisconnectSwitch => self.disconnect_switch(),
+        }
+    }
+}
+
+fn filter_palette(query: &str, items: &[(String, PaletteAction)]) -> Vec<(usize, u32)> {
+    if query.trim().is_empty() {
+        return items.iter().enumerate().map(|(i, _)| (i, 0)).collect();
+    }
+    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+    let mut matcher = Matcher::new(NucleoConfig::DEFAULT);
+    let mut buf = Vec::new();
+    let mut scored: Vec<(usize, u32)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, (label, _))| {
+            let score = pattern.score(Utf32Str::new(label, &mut buf), &mut matcher)?;
+            Some((idx, score))
+        })
+        .collect();
+    scored.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
+    scored
+}
+
 /// Maps an egui key to the (code, location) the Eric table expects.
 /// Shifted symbols map to their physical base key; Shift goes as its own event.
 fn java_key(key: egui::Key) -> Option<(i32, i32)> {
@@ -1045,6 +1173,15 @@ impl eframe::App for MpcApp {
     // Single `ui()` owns the whole frame: sidebar, top bar, and video area.
     #[expect(clippy::too_many_lines)]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Command palette shortcut: F1 or Ctrl+P — fuzzy search actions/ports
+        let palette_toggle = ui.ctx().input(|i| {
+            i.key_pressed(egui::Key::F1) || (i.modifiers.ctrl && i.key_pressed(egui::Key::P))
+        });
+        if palette_toggle && !self.palette_open {
+            self.palette_open = true;
+            self.palette_query.clear();
+            self.palette_selected = 0;
+        }
         if let Some(receiver) = &self.frames {
             // Upload only the freshest frame; skipped uploads never display.
             // Status/Error messages are still all processed.
@@ -1098,6 +1235,97 @@ impl eframe::App for MpcApp {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
 
+        // Command palette overlay — fuzzy search actions/ports via `nucleo-matcher`
+        if self.palette_open {
+            // Build entries once per frame (owned, no borrow of self afterwards)
+            let entries = self.palette_entries();
+            let mut should_close = false;
+            let mut should_execute: Option<usize> = None;
+            // We need filtered for rendering, but query may change inside modal.
+            // Recompute inside modal after editing palette_query directly to avoid one-frame lag.
+            egui::containers::Modal::new("palette_modal".into()).show(ui.ctx(), |ui| {
+                if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                    should_close = true;
+                }
+                ui.set_width(520.0);
+                ui.small(egui::RichText::new("↑/↓ navigate | Enter: run | Esc: close | F1 / Ctrl+P: toggle").monospace());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.palette_query)
+                        .hint_text("Type to filter…")
+                        .desired_width(f32::INFINITY),
+                );
+                // Auto-focus when just opened
+                if self.palette_query.is_empty() {
+                    // Only request focus once per open; persistent focus is fine
+                    response.request_focus();
+                }
+                // Reset selection when query changes — detect via response.changed()
+                if response.changed() {
+                    self.palette_selected = 0;
+                }
+                let filtered = filter_palette(&self.palette_query, &entries);
+                if self.palette_selected >= filtered.len() {
+                    self.palette_selected = filtered.len().saturating_sub(1);
+                }
+                // Arrow navigation
+                if ui.ctx().input(|i| i.key_pressed(egui::Key::ArrowDown)) && !filtered.is_empty() {
+                    self.palette_selected = (self.palette_selected + 1).min(filtered.len() - 1);
+                }
+                if ui.ctx().input(|i| i.key_pressed(egui::Key::ArrowUp)) && !filtered.is_empty() {
+                    self.palette_selected = self.palette_selected.saturating_sub(1);
+                }
+                if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
+                    && let Some((idx, _)) = filtered.get(self.palette_selected)
+                {
+                    should_execute = Some(*idx);
+                }
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    if filtered.is_empty() {
+                        ui.label("No matches");
+                    } else {
+                        for (filtered_idx, (orig_idx, _)) in filtered.iter().enumerate() {
+                            let label = &entries[*orig_idx].0;
+                            let selected = filtered_idx == self.palette_selected;
+                            let resp = ui.selectable_label(selected, label);
+                            if resp.clicked() {
+                                should_execute = Some(*orig_idx);
+                            }
+                            if resp.hovered() {
+                                self.palette_selected = filtered_idx;
+                            }
+                        }
+                    }
+                });
+            });
+            if should_close {
+                self.palette_open = false;
+            }
+            if let Some(idx) = should_execute {
+                self.palette_open = false;
+                // Need to get action without borrowing self again after mutable borrow above.
+                // Re-build entries (cheap) to avoid borrow conflict with closure.
+                let entries2 = self.palette_entries();
+                if let Some((_, action)) = entries2.get(idx) {
+                    let act = match action {
+                        PaletteAction::ConnectPort(i) => PaletteAction::ConnectPort(*i),
+                        PaletteAction::DisconnectVideo => PaletteAction::DisconnectVideo,
+                        PaletteAction::ReconnectVideo => PaletteAction::ReconnectVideo,
+                        PaletteAction::Paste => PaletteAction::Paste,
+                        PaletteAction::ChangeTty(n) => PaletteAction::ChangeTty(*n),
+                        PaletteAction::Cad => PaletteAction::Cad,
+                        PaletteAction::AutoAdjust => PaletteAction::AutoAdjust,
+                        PaletteAction::Calibrate => PaletteAction::Calibrate,
+                        PaletteAction::ToggleSidebar => PaletteAction::ToggleSidebar,
+                        PaletteAction::RefreshPorts => PaletteAction::RefreshPorts,
+                        PaletteAction::ConnectSwitch => PaletteAction::ConnectSwitch,
+                        PaletteAction::DisconnectSwitch => PaletteAction::DisconnectSwitch,
+                    };
+                    self.execute_palette(act);
+                }
+            }
+        }
+
         // Auto-refresh the port list so busy markers stay fresh. Only while
         // connected (`switch_info` is cleared by Disconnect and absent until
         // the first success, so this never fights those states or spams
@@ -1119,7 +1347,8 @@ impl eframe::App for MpcApp {
 
         // Forward key presses to the target while a session runs (text events
         // ignored: the press/release pair suffices; pointer events share the channel).
-        if self.cmd_tx.is_some() {
+        // Suppressed while command palette is open so typing filters instead of reaching the KVM.
+        if !self.palette_open && self.cmd_tx.is_some() {
             let mut commands: Vec<VideoCommand> = ui.ctx().input(|input| {
                 input
                     .events
@@ -1282,7 +1511,7 @@ impl eframe::App for MpcApp {
                                             port.name.as_deref().unwrap_or(&port.id).to_owned();
                                         let label = if port.is_busy() {
                                             format!(
-                                                "{}  👥 {name} (in use)",
+                                                "{}  {name} (in use)",
                                                 port.display_index(),
                                             )
                                         } else {
@@ -1290,8 +1519,8 @@ impl eframe::App for MpcApp {
                                         };
                                         let selected = self.selected_port == Some(index);
                                         let selected_port = port.clone();
-                                        // In-use ports stay clickable; the 👥 marker,
-                                        // suffix, and tooltip show someone is on them.
+                                        // In-use ports stay clickable; the suffix
+                                        // and tooltip show someone is on them.
                                         let busy_tip = port.busy_tooltip();
                                         // In-use rows get the theme's warning color.
                                         let warn = ui.visuals().warn_fg_color;
