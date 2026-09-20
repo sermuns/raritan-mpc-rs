@@ -63,3 +63,7 @@ done`, `first framebuffer update received`).
 - `docs/rdm.md` — control channel, sessions, TR-grant evidence.
 - `docs/verification.md` — captures, TLS decryption, replay tests.
 - `docs/development.md` — repo map, capture recipes.
+
+## Lint hygiene
+
+- Never use `#[allow(...)]` — use `#[expect(...)]` instead so unneeded suppressions are flagged.
