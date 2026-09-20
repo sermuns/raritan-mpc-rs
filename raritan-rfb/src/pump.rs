@@ -103,7 +103,9 @@ impl<S: Read + Write> RfbStream<S> {
                 self.framebuffer_size = Some((width, height));
                 Ok(Incoming::Handled)
             }
-            _ => self.skip_server_message(message_type).map(|()| Incoming::Handled),
+            _ => self
+                .skip_server_message(message_type)
+                .map(|()| Incoming::Handled),
         }
     }
 
@@ -436,11 +438,7 @@ impl<S: Read + Write> RfbStream<S> {
             let _timestamp_seconds = read_u32(&mut self.stream)?;
             let _timestamp_micros = read_u32(&mut self.stream)?;
         }
-        Ok(UpdateHeader {
-            flags,
-            count,
-            size,
-        })
+        Ok(UpdateHeader { flags, count, size })
     }
 
     /// Reads and parses the body of a previously read [`UpdateHeader`].

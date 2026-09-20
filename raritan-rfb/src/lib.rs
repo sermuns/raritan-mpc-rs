@@ -240,18 +240,12 @@ mod tests {
         split.request_region_update(0, 0, 2, 1, true).unwrap();
         let update = split.read_update_body(&header).unwrap();
         assert_eq!(update, expected);
-        assert_eq!(
-            split.stream.written,
-            vec![3, 1, 0, 0, 0, 0, 0, 2, 0, 1]
-        );
+        assert_eq!(split.stream.written, vec![3, 1, 0, 0, 0, 0, 0, 2, 0, 1]);
         // Red then blue pixel, opaque.
         let mut framebuffer = Framebuffer::new(2, 1);
         framebuffer
             .apply_update(&update, PixelFormat::RGB565)
             .unwrap();
-        assert_eq!(
-            framebuffer.rgba,
-            vec![255, 0, 0, 255, 0, 0, 255, 255]
-        );
+        assert_eq!(framebuffer.rgba, vec![255, 0, 0, 255, 0, 0, 255, 255]);
     }
 }

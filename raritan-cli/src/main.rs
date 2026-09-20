@@ -1,8 +1,6 @@
 use clap::Parser;
 use raritan_rdm::RdmClient;
-use raritan_session::{
-    capture_frames, encode_ppm, find_port, is_black, video_from_client,
-};
+use raritan_session::{capture_frames, encode_ppm, find_port, is_black, video_from_client};
 use tracing::{debug, info, warn};
 
 const DEFAULT_USER: &str = "admin";

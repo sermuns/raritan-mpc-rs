@@ -63,8 +63,22 @@ fn lrle_greys(grey_depth: usize) -> Vec<u32> {
 }
 
 const COLORS_4: [u32; 16] = [
-    0xff00_0000, 0xff7f_0000, 0xff00_7f00, 0xff7f_7f00, 0xff00_007f, 0xff7f_007f, 0xff00_7f7f, 0xff7f_7f7f,
-    0xffc0_c0c0, 0xffff_0000, 0xff00_ff00, 0xffff_ff00, 0xff00_00ff, 0xffff_00ff, 0xff00_ffff, 0xffff_ffff,
+    0xff00_0000,
+    0xff7f_0000,
+    0xff00_7f00,
+    0xff7f_7f00,
+    0xff00_007f,
+    0xff7f_007f,
+    0xff00_7f7f,
+    0xff7f_7f7f,
+    0xffc0_c0c0,
+    0xffff_0000,
+    0xff00_ff00,
+    0xffff_ff00,
+    0xff00_00ff,
+    0xffff_00ff,
+    0xff00_ffff,
+    0xffff_ffff,
 ];
 
 fn lrle_color(conf: &LrleConfig, idx: usize) -> Option<u32> {
@@ -111,7 +125,9 @@ fn lrle_colors(conf: &LrleConfig) -> Vec<u32> {
         return lrle_greys(conf.grey_depth);
     }
     match conf.depth {
-        15 => (0..1usize << 15).filter_map(|idx| lrle_color(conf, idx)).collect(),
+        15 => (0..1usize << 15)
+            .filter_map(|idx| lrle_color(conf, idx))
+            .collect(),
         7 => (0..128).filter_map(|idx| lrle_color(conf, idx)).collect(),
         4 => COLORS_4.to_vec(),
         _ => vec![0xff00_0000],

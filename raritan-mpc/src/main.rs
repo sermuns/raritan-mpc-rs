@@ -591,7 +591,14 @@ fn run_video_session(
         rfb.set_read_timeout(Some(RFB_BODY_TIMEOUT))?;
         // Keys held on the target; all are released on exit so none stays stuck down.
         let mut held: Vec<u16> = Vec::new();
-        let inner = run_pump(&mut rfb, cmd_receiver, sender, &mut framebuffer, format, &mut held);
+        let inner = run_pump(
+            &mut rfb,
+            cmd_receiver,
+            sender,
+            &mut framebuffer,
+            format,
+            &mut held,
+        );
         for eric in held {
             let _ = rfb.write_key_event(eric, false);
         }
@@ -620,25 +627,24 @@ fn run_pump(
     let mut dropped_frames: u64 = 0;
     let mut ping_last = Instant::now();
     let mut ping_serial: u32 = 0;
-        let mut drain = |rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>| -> eyre::Result<bool> {
-            loop {
-                match cmd_receiver.try_recv() {
-                    Ok(command) => send_command(rfb, command, &mut *held)?,
-                    Err(mpsc::TryRecvError::Empty) => return Ok(false),
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        // GUI dropped cmd_tx: exit instead of idling forever.
-                        debug!("video worker: command channel closed; exiting");
-                        return Ok(true);
-                    }
+    let mut drain = |rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>| -> eyre::Result<bool> {
+        loop {
+            match cmd_receiver.try_recv() {
+                Ok(command) => send_command(rfb, command, &mut *held)?,
+                Err(mpsc::TryRecvError::Empty) => return Ok(false),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // GUI dropped cmd_tx: exit instead of idling forever.
+                    debug!("video worker: command channel closed; exiting");
+                    return Ok(true);
                 }
             }
-        };
-        // Applies one decoded update to the pixel buffer and forwards it
-        // to the GUI; true when the frame receiver went away. Never blocks
-        // the pump: full channels drop frames to keep latency low.
-        let mut handle = |update: &raritan_rfb::FramebufferUpdate,
-                          size: Option<(u16, u16)>|
-         -> eyre::Result<bool> {
+        }
+    };
+    // Applies one decoded update to the pixel buffer and forwards it
+    // to the GUI; true when the frame receiver went away. Never blocks
+    // the pump: full channels drop frames to keep latency low.
+    let mut handle =
+        |update: &raritan_rfb::FramebufferUpdate, size: Option<(u16, u16)>| -> eyre::Result<bool> {
             // Late 128 format changes resize the stream: recreate the pixel
             // buffer or rects clip and misalign.
             if let Some((width, height)) = size
@@ -673,46 +679,46 @@ fn run_pump(
                 }
             }
         };
-        loop {
-            if ping_last.elapsed() >= Duration::from_secs(20) {
-                ping_serial = ping_serial.wrapping_add(1);
-                rfb.write_ping_request(ping_serial)?;
-                ping_last = Instant::now();
-            }
-            if drain(rfb)? {
-                return Ok(());
-            }
-            // Idle poll: loop back to flush input and observe channel closes.
-            if !rfb.wait_for_message(INPUT_POLL_INTERVAL)? {
-                continue;
-            }
-            // Input that arrived during the wait goes out before blocking
-            // on the (possibly large) update body.
-            if drain(rfb)? {
-                return Ok(());
-            }
-            match rfb.poll_incoming()? {
-                raritan_rfb::Incoming::Stashed(update) => {
-                    rfb.request_framebuffer_update(true)?;
-                    if handle(&update, rfb.framebuffer_size())? {
-                        return Ok(());
-                    }
+    loop {
+        if ping_last.elapsed() >= Duration::from_secs(20) {
+            ping_serial = ping_serial.wrapping_add(1);
+            rfb.write_ping_request(ping_serial)?;
+            ping_last = Instant::now();
+        }
+        if drain(rfb)? {
+            return Ok(());
+        }
+        // Idle poll: loop back to flush input and observe channel closes.
+        if !rfb.wait_for_message(INPUT_POLL_INTERVAL)? {
+            continue;
+        }
+        // Input that arrived during the wait goes out before blocking
+        // on the (possibly large) update body.
+        if drain(rfb)? {
+            return Ok(());
+        }
+        match rfb.poll_incoming()? {
+            raritan_rfb::Incoming::Stashed(update) => {
+                rfb.request_framebuffer_update(true)?;
+                if handle(&update, rfb.framebuffer_size())? {
+                    return Ok(());
                 }
-                raritan_rfb::Incoming::Live(header) => {
-                    // Request while the body is still on the wire, like
-                    // Java's `processFramebufferUpdate` (request before
-                    // reading): the server renders the next frame during
-                    // this one's transfer and decode.
-                    rfb.request_framebuffer_update(true)?;
-                    let update = rfb.read_update_body(&header)?;
-                    if handle(&update, rfb.framebuffer_size())? {
-                        return Ok(());
-                    }
-                }
-                raritan_rfb::Incoming::Handled => {}
             }
+            raritan_rfb::Incoming::Live(header) => {
+                // Request while the body is still on the wire, like
+                // Java's `processFramebufferUpdate` (request before
+                // reading): the server renders the next frame during
+                // this one's transfer and decode.
+                rfb.request_framebuffer_update(true)?;
+                let update = rfb.read_update_body(&header)?;
+                if handle(&update, rfb.framebuffer_size())? {
+                    return Ok(());
+                }
+            }
+            raritan_rfb::Incoming::Handled => {}
         }
     }
+}
 
 /// Writes one GUI command to the target, tracking held keys so they can
 /// be released when the session ends.
@@ -789,7 +795,11 @@ fn chord_sequence(codes: &[(i32, i32)]) -> Vec<VideoCommand> {
         .iter()
         .map(|&eric| VideoCommand::Key { eric, down: true })
         .collect();
-    seq.extend(held.iter().rev().map(|&eric| VideoCommand::Key { eric, down: false }));
+    seq.extend(
+        held.iter()
+            .rev()
+            .map(|&eric| VideoCommand::Key { eric, down: false }),
+    );
     seq
 }
 
@@ -816,7 +826,9 @@ fn paste_sequence(text: &str) -> Vec<VideoCommand> {
         let Some((code, loc, need_shift)) = paste_char_to_java(ch) else {
             continue;
         };
-        if need_shift != shift_held && let Some(eric) = shift_eric {
+        if need_shift != shift_held
+            && let Some(eric) = shift_eric
+        {
             out.push(VideoCommand::Key {
                 eric,
                 down: need_shift,
@@ -920,23 +932,47 @@ impl MpcApp {
         }
         // Video / input actions (available when video session exists, but show always with hint)
         if self.cmd_tx.is_some() {
-            items.push((String::from("⌨ Paste text — type clipboard as keystrokes"), PaletteAction::Paste));
+            items.push((
+                String::from("⌨ Paste text — type clipboard as keystrokes"),
+                PaletteAction::Paste,
+            ));
             for n in 1..=12 {
-                items.push((format!("🖥 Change TTY — Ctrl+Alt+F{n}"), PaletteAction::ChangeTty(n)));
+                items.push((
+                    format!("🖥 Change TTY — Ctrl+Alt+F{n}"),
+                    PaletteAction::ChangeTty(n),
+                ));
             }
             items.push((String::from("⌨ Send Ctrl+Alt+Delete"), PaletteAction::Cad));
-            items.push((String::from("◎ Auto-adjust video"), PaletteAction::AutoAdjust));
+            items.push((
+                String::from("◎ Auto-adjust video"),
+                PaletteAction::AutoAdjust,
+            ));
             items.push((String::from("🎨 Calibrate color"), PaletteAction::Calibrate));
-            items.push((String::from("× Disconnect video"), PaletteAction::DisconnectVideo));
-            items.push((String::from("↻ Reconnect video"), PaletteAction::ReconnectVideo));
+            items.push((
+                String::from("× Disconnect video"),
+                PaletteAction::DisconnectVideo,
+            ));
+            items.push((
+                String::from("↻ Reconnect video"),
+                PaletteAction::ReconnectVideo,
+            ));
         }
         // Switch / sidebar
         items.push((String::from("↻ Refresh ports"), PaletteAction::RefreshPorts));
-        items.push((String::from("◀ Toggle sidebar"), PaletteAction::ToggleSidebar));
+        items.push((
+            String::from("◀ Toggle sidebar"),
+            PaletteAction::ToggleSidebar,
+        ));
         if self.switch_info.is_some() {
-            items.push((String::from("× Disconnect switch"), PaletteAction::DisconnectSwitch));
+            items.push((
+                String::from("× Disconnect switch"),
+                PaletteAction::DisconnectSwitch,
+            ));
         } else {
-            items.push((String::from("🔌 Connect to switch"), PaletteAction::ConnectSwitch));
+            items.push((
+                String::from("🔌 Connect to switch"),
+                PaletteAction::ConnectSwitch,
+            ));
         }
         items
     }
@@ -971,13 +1007,19 @@ impl MpcApp {
             PaletteAction::Cad => self.confirm_cad = true,
             PaletteAction::AutoAdjust => {
                 if let Some(tx) = &self.cmd_tx {
-                    let _ = tx.send(VideoCommand::VideoSettings { setting: 18, value: 0 });
+                    let _ = tx.send(VideoCommand::VideoSettings {
+                        setting: 18,
+                        value: 0,
+                    });
                     self.pending_video_action = Some(String::from("Auto-sensing video…"));
                 }
             }
             PaletteAction::Calibrate => {
                 if let Some(tx) = &self.cmd_tx {
-                    let _ = tx.send(VideoCommand::VideoSettings { setting: 19, value: 0 });
+                    let _ = tx.send(VideoCommand::VideoSettings {
+                        setting: 19,
+                        value: 0,
+                    });
                     self.pending_video_action = Some(String::from("Calibrating color…"));
                 }
             }
@@ -1301,23 +1343,25 @@ impl eframe::App for MpcApp {
                     should_execute = Some(*idx);
                 }
                 ui.add_space(8.0);
-                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                    if filtered.is_empty() {
-                        ui.label("No matches");
-                    } else {
-                        for (filtered_idx, (orig_idx, _)) in filtered.iter().enumerate() {
-                            let label = &entries[*orig_idx].0;
-                            let selected = filtered_idx == self.palette_selected;
-                            let resp = ui.selectable_label(selected, label);
-                            if resp.clicked() {
-                                should_execute = Some(*orig_idx);
-                            }
-                            if resp.hovered() {
-                                self.palette_selected = filtered_idx;
+                egui::ScrollArea::vertical()
+                    .max_height(420.0)
+                    .show(ui, |ui| {
+                        if filtered.is_empty() {
+                            ui.label("No matches");
+                        } else {
+                            for (filtered_idx, (orig_idx, _)) in filtered.iter().enumerate() {
+                                let label = &entries[*orig_idx].0;
+                                let selected = filtered_idx == self.palette_selected;
+                                let resp = ui.selectable_label(selected, label);
+                                if resp.clicked() {
+                                    should_execute = Some(*orig_idx);
+                                }
+                                if resp.hovered() {
+                                    self.palette_selected = filtered_idx;
+                                }
                             }
                         }
-                    }
-                });
+                    });
             });
             if should_close {
                 self.palette_open = false;
@@ -1369,14 +1413,19 @@ impl eframe::App for MpcApp {
         // Forward key presses to the target while a session runs (text events
         // ignored: the press/release pair suffices; pointer events share the channel).
         // Suppressed while command palette is open so typing filters instead of reaching the KVM.
-        if !self.palette_open && let Some(tx) = self.cmd_tx.clone() {
+        if !self.palette_open
+            && let Some(tx) = self.cmd_tx.clone()
+        {
             ui.ctx().input(|input| {
                 for event in &input.events {
                     if let egui::Event::Key { key, pressed, .. } = event
                         && let Some(eric) =
                             java_key(*key).and_then(|(code, loc)| eric_code(code, loc))
                     {
-                        let _ = tx.send(VideoCommand::Key { eric, down: *pressed });
+                        let _ = tx.send(VideoCommand::Key {
+                            eric,
+                            down: *pressed,
+                        });
                     }
                 }
             });
@@ -1435,7 +1484,10 @@ impl eframe::App for MpcApp {
                         let busy = self.port_refresh.is_some();
                         let connected = self.switch_info.is_some();
                         let (label, hover) = if connected {
-                            ("× Disconnect", "Drop the video session and forget this switch")
+                            (
+                                "× Disconnect",
+                                "Drop the video session and forget this switch",
+                            )
                         } else {
                             ("🔌 Connect", "Enumerate ports on the switch above")
                         };
@@ -1509,9 +1561,14 @@ impl eframe::App for MpcApp {
                                             port.name.as_deref().unwrap_or(&port.id).to_owned();
                                         let label = match (port.index, port.is_busy()) {
                                             (Some(idx), true) => {
-                                                format!("{:>2}  {name} (in use)", idx.saturating_add(1))
+                                                format!(
+                                                    "{:>2}  {name} (in use)",
+                                                    idx.saturating_add(1)
+                                                )
                                             }
-                                            (Some(idx), false) => format!("{:>2}  {name}", idx.saturating_add(1)),
+                                            (Some(idx), false) => {
+                                                format!("{:>2}  {name}", idx.saturating_add(1))
+                                            }
                                             (None, true) => format!(" ?  {name} (in use)"),
                                             (None, false) => format!(" ?  {name}"),
                                         };
@@ -1611,7 +1668,9 @@ impl eframe::App for MpcApp {
                                 .show_ui(ui, |ui| {
                                     for n in 1..=12 {
                                         let label = format!("F{n}  Ctrl+Alt+F{n}");
-                                        if ui.selectable_value(&mut self.tty_fn, n, &label).clicked()
+                                        if ui
+                                            .selectable_value(&mut self.tty_fn, n, &label)
+                                            .clicked()
                                             && let Some(tx) = &self.cmd_tx
                                         {
                                             for command in tty_sequence(n) {
@@ -1620,7 +1679,11 @@ impl eframe::App for MpcApp {
                                         }
                                     }
                                 });
-                            if ui.button("⌨ Paste text").on_hover_text("Paste text as keystrokes to the selected port").clicked() {
+                            if ui
+                                .button("⌨ Paste text")
+                                .on_hover_text("Paste text as keystrokes to the selected port")
+                                .clicked()
+                            {
                                 self.paste_text.clear();
                                 self.paste_open = true;
                             }
@@ -1692,7 +1755,9 @@ impl eframe::App for MpcApp {
                         }
                         ui.set_width(420.0);
                         ui.heading("Paste text as keystrokes");
-                        ui.label("Text will be typed into the selected port, character by character.");
+                        ui.label(
+                            "Text will be typed into the selected port, character by character.",
+                        );
                         let edit = egui::TextEdit::multiline(&mut self.paste_text)
                             .hint_text("Paste text here…")
                             .desired_width(f32::INFINITY)
@@ -1700,7 +1765,10 @@ impl eframe::App for MpcApp {
                         ui.add(edit);
                         ui.horizontal(|ui| {
                             let can_send = !self.paste_text.is_empty() && self.cmd_tx.is_some();
-                            if ui.add_enabled(can_send, egui::Button::new("✔ Type it")).clicked() {
+                            if ui
+                                .add_enabled(can_send, egui::Button::new("✔ Type it"))
+                                .clicked()
+                            {
                                 if let Some(tx) = &self.cmd_tx {
                                     for command in paste_sequence(&self.paste_text) {
                                         let _ = tx.send(command);

@@ -11,7 +11,10 @@ pub use raritan_common::SessionCreds;
 use eyre::OptionExt;
 use raritan_rdm::{Port, RdmClient};
 use raritan_rfb::{Framebuffer, PixelFormat, RfbStream};
-use std::{net::TcpStream, time::{Duration, Instant}};
+use std::{
+    net::TcpStream,
+    time::{Duration, Instant},
+};
 use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
