@@ -1258,7 +1258,7 @@ impl eframe::App for MpcApp {
                 ui.set_width(520.0);
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        egui::RichText::new("↑/↓ navigate | Enter: run | Esc: close | F1 / Ctrl+P: toggle")
+                        egui::RichText::new("↑/↓ navigate | Enter: run | Esc: close")
                             .family(egui::FontFamily::Monospace)
                             .small()
                             .weak(),
@@ -1568,19 +1568,12 @@ impl eframe::App for MpcApp {
         }
 
         egui::Panel::bottom("hints").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.vertical_centered(|ui| {
                 ui.small(
-                    egui::RichText::new("F1 / Ctrl+P: palette  |  F11: fullscreen  |  Esc: close")
+                    egui::RichText::new("F1 / Ctrl+P: palette  |  F11: fullscreen")
                         .weak()
                         .monospace(),
                 );
-                if self.cmd_tx.is_some() {
-                    ui.small(
-                        egui::RichText::new("  •  ⌨ Paste  •  🖥 TTY  •  ⌨ Ctrl+Alt+Del  •  ◎/🎨 video")
-                            .weak()
-                            .monospace(),
-                    );
-                }
             });
         });
 
