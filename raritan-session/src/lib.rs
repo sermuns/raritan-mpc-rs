@@ -38,22 +38,22 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
     }) {
         return Ok(port);
     }
-    // Collect all fuzzy matches so ambiguity fails loudly instead of picking port 0.
-    let fuzzy: Vec<&Port> = ports
-        .iter()
-        .filter(|port| {
-            port.id.ends_with(selector)
-                || port
-                    .name
-                    .as_deref()
-                    .is_some_and(|name| name.contains(selector))
-        })
-        .collect();
-    match fuzzy.len() {
-        0 => eyre::bail!("no port matches {selector:?}"),
-        1 => Ok(fuzzy[0]),
-        n => eyre::bail!("{n} ports match {selector:?}; be more specific"),
+    // Find fuzzy matches without allocating a Vec, failing loudly on ambiguity.
+    let mut candidates = ports.iter().filter(|port| {
+        port.id.ends_with(selector)
+            || port
+                .name
+                .as_deref()
+                .is_some_and(|name| name.contains(selector))
+    });
+    let Some(first) = candidates.next() else {
+        eyre::bail!("no port matches {selector:?}")
+    };
+    if candidates.next().is_some() {
+        let n = 2 + candidates.count();
+        eyre::bail!("{n} ports match {selector:?}; be more specific")
     }
+    Ok(first)
 }
 
 /// A video session owning its own RDM login (the CLI path). The RDM

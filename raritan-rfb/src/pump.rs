@@ -45,7 +45,17 @@ const MAX_SKIP_BYTES: usize = 1024 * 1024;
 const MAX_RC_MESSAGE_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn validate_framebuffer_dimensions(width: u16, height: u16) -> Result<()> {
-    crate::framebuffer::Framebuffer::try_new(width, height).map(|_| ())
+    if width == 0 || height == 0 {
+        bail!("invalid framebuffer dimensions: {width}x{height}");
+    }
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| eyre!("framebuffer dimensions overflow: {width}x{height}"))?;
+    if len > MAX_FRAMEBUFFER_BYTES {
+        bail!("framebuffer dimensions too large: {width}x{height}");
+    }
+    Ok(())
 }
 
 impl<S: Read + Write> RfbStream<S> {
@@ -496,8 +506,8 @@ impl<S: Read + Write> RfbStream<S> {
             if is_lrle {
                 // Rects are 4-byte aligned.
                 let pad = (4 - size % 4) % 4;
-                let mut padding = vec![0; pad];
-                reader.read_exact(&mut padding)?;
+                let mut pad_buf = [0u8; 3];
+                reader.read_exact(&mut pad_buf[..pad])?;
             }
             rectangles.push(FramebufferRectangle {
                 x,

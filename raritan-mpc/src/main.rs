@@ -393,16 +393,20 @@ impl MpcApp {
     fn port_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.ports.len()).collect();
         if self.sort_order == SortOrder::Name {
-            order.sort_by(|&a, &b| {
-                let name = |index: usize| {
-                    self.ports[index]
+            // Cache lowercase once per port instead of per comparison (was O(n log n) allocs per frame).
+            let mut keyed: Vec<(String, usize)> = order
+                .into_iter()
+                .map(|idx| {
+                    let name = self.ports[idx]
                         .name
                         .as_deref()
-                        .unwrap_or(&self.ports[index].id)
-                        .to_lowercase()
-                };
-                name(a).cmp(&name(b))
-            });
+                        .unwrap_or(&self.ports[idx].id)
+                        .to_lowercase();
+                    (name, idx)
+                })
+                .collect();
+            keyed.sort_by(|a, b| a.0.cmp(&b.0));
+            order = keyed.into_iter().map(|(_, idx)| idx).collect();
         }
         order
     }
@@ -907,7 +911,10 @@ impl MpcApp {
         for idx in self.port_order() {
             if let Some(port) = self.ports.get(idx) {
                 let name = port.name.as_deref().unwrap_or(&port.id);
-                let label = format!("🔌 Connect to port {} - {}", port.display_index(), name);
+                let label = match port.index {
+                    Some(v) => format!("🔌 Connect to port {} - {name}", v.saturating_add(1)),
+                    None => format!("🔌 Connect to port ? - {name}"),
+                };
                 items.push((label, PaletteAction::ConnectPort(idx)));
             }
         }
@@ -1362,30 +1369,19 @@ impl eframe::App for MpcApp {
         // Forward key presses to the target while a session runs (text events
         // ignored: the press/release pair suffices; pointer events share the channel).
         // Suppressed while command palette is open so typing filters instead of reaching the KVM.
-        if !self.palette_open && self.cmd_tx.is_some() {
-            let mut commands: Vec<VideoCommand> = ui.ctx().input(|input| {
-                input
-                    .events
-                    .iter()
-                    .filter_map(|event| {
-                        if let egui::Event::Key { key, pressed, .. } = event {
-                            java_key(*key)
-                                .and_then(|(code, location)| eric_code(code, location))
-                                .map(|eric| VideoCommand::Key {
-                                    eric,
-                                    down: *pressed,
-                                })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            });
-            commands.extend(self.pointer_commands(ui));
-            if let Some(tx) = &self.cmd_tx {
-                for command in commands {
-                    let _ = tx.send(command);
+        if !self.palette_open && let Some(tx) = self.cmd_tx.clone() {
+            ui.ctx().input(|input| {
+                for event in &input.events {
+                    if let egui::Event::Key { key, pressed, .. } = event
+                        && let Some(eric) =
+                            java_key(*key).and_then(|(code, loc)| eric_code(code, loc))
+                    {
+                        let _ = tx.send(VideoCommand::Key { eric, down: *pressed });
+                    }
                 }
+            });
+            for cmd in self.pointer_commands(ui) {
+                let _ = tx.send(cmd);
             }
         }
 
@@ -1511,13 +1507,13 @@ impl eframe::App for MpcApp {
                                         let port = &self.ports[index];
                                         let name =
                                             port.name.as_deref().unwrap_or(&port.id).to_owned();
-                                        let label = if port.is_busy() {
-                                            format!(
-                                                "{:>2}  {name} (in use)",
-                                                port.display_index(),
-                                            )
-                                        } else {
-                                            format!("{:>2}  {}", port.display_index(), name)
+                                        let label = match (port.index, port.is_busy()) {
+                                            (Some(idx), true) => {
+                                                format!("{:>2}  {name} (in use)", idx.saturating_add(1))
+                                            }
+                                            (Some(idx), false) => format!("{:>2}  {name}", idx.saturating_add(1)),
+                                            (None, true) => format!(" ?  {name} (in use)"),
+                                            (None, false) => format!(" ?  {name}"),
                                         };
                                         let selected = self.selected_port == Some(index);
                                         let selected_port = port.clone();

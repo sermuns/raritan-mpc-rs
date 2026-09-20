@@ -37,70 +37,83 @@ fn lrle_config(subencoding: usize) -> Result<LrleConfig> {
     })
 }
 
-/// Grey ramp, mirroring `createLRLEColorTables` integer math exactly.
+fn grey_color(grey_depth: usize, idx: usize) -> Option<u32> {
+    if grey_depth == 0 || grey_depth > 8 || idx >= (1usize << grey_depth) {
+        return None;
+    }
+    let n = idx as u32;
+    let channel = match grey_depth {
+        1 => n * 255,
+        2 => n * 85,
+        3 => n * 73 / 2,
+        4 => n * 17,
+        5 => n * 33 / 4,
+        6 => n * 65 / 16,
+        _ => return None,
+    };
+    Some(0xff00_0000 | channel << 16 | channel << 8 | channel)
+}
+
+#[expect(dead_code)]
+// Keep helper for tests that still want a Vec, but hot path uses `grey_color`.
 fn lrle_greys(grey_depth: usize) -> Vec<u32> {
-    (0..1u32 << grey_depth)
-        .map(|n| {
-            let channel = match grey_depth {
-                1 => n * 255,
-                2 => n * 85,
-                3 => n * 73 / 2,
-                4 => n * 17,
-                5 => n * 33 / 4,
-                6 => n * 65 / 16,
-                _ => 0xff_00_ff,
-            };
-            0xff00_0000 | channel << 16 | channel << 8 | channel
-        })
+    (0..1usize << grey_depth)
+        .filter_map(|idx| grey_color(grey_depth, idx))
         .collect()
 }
 
+const COLORS_4: [u32; 16] = [
+    0xff00_0000, 0xff7f_0000, 0xff00_7f00, 0xff7f_7f00, 0xff00_007f, 0xff7f_007f, 0xff00_7f7f, 0xff7f_7f7f,
+    0xffc0_c0c0, 0xffff_0000, 0xff00_ff00, 0xffff_ff00, 0xff00_00ff, 0xffff_00ff, 0xff00_ffff, 0xffff_ffff,
+];
+
+fn lrle_color(conf: &LrleConfig, idx: usize) -> Option<u32> {
+    if conf.grey {
+        return grey_color(conf.grey_depth, idx);
+    }
+    match conf.depth {
+        15 => {
+            if idx >= 1usize << 15 {
+                return None;
+            }
+            let n = idx as u32;
+            let red = ((n & 0x7c00) >> 10) * 33 / 4;
+            let green = ((n & 0x03e0) >> 5) * 33 / 4;
+            let blue = (n & 0x001f) * 33 / 4;
+            Some(0xff00_0000 | (red << 16) | (green << 8) | blue)
+        }
+        7 => {
+            if idx >= 128 {
+                return None;
+            }
+            let n = idx as u32;
+            if n < 125 {
+                const LEVELS: [u32; 5] = [0, 64, 128, 192, 255];
+                Some(
+                    0xff00_0000
+                        | LEVELS[n as usize / 25] << 16
+                        | LEVELS[n as usize / 5 % 5] << 8
+                        | LEVELS[n as usize % 5],
+                )
+            } else {
+                Some(0xffff_0000)
+            }
+        }
+        4 => COLORS_4.get(idx).copied(),
+        _ => None,
+    }
+}
+
+#[expect(dead_code)]
 fn lrle_colors(conf: &LrleConfig) -> Vec<u32> {
+    // Retained for tests / non-hot paths; hot path uses `lrle_color` without alloc.
     if conf.grey {
         return lrle_greys(conf.grey_depth);
     }
     match conf.depth {
-        15 => (0..1u32 << 15)
-            .map(|n| {
-                let red = ((n & 0x7c00) >> 10) * 33 / 4;
-                let green = ((n & 0x03e0) >> 5) * 33 / 4;
-                let blue = (n & 0x001f) * 33 / 4;
-                0xff00_0000 | (red << 16) | (green << 8) | blue
-            })
-            .collect(),
-        7 => {
-            let levels = [0, 64, 128, 192, 255];
-            (0..128)
-                .map(|n| {
-                    if n < 125 {
-                        0xff00_0000
-                            | levels[n as usize / 25] << 16
-                            | levels[n as usize / 5 % 5] << 8
-                            | levels[n as usize % 5]
-                    } else {
-                        0xffff_0000
-                    }
-                })
-                .collect()
-        }
-        4 => vec![
-            0xff00_0000,
-            0xff7f_0000,
-            0xff00_7f00,
-            0xff7f_7f00,
-            0xff00_007f,
-            0xff7f_007f,
-            0xff00_7f7f,
-            0xff7f_7f7f,
-            0xffc0_c0c0,
-            0xffff_0000,
-            0xff00_ff00,
-            0xffff_ff00,
-            0xff00_00ff,
-            0xffff_00ff,
-            0xff00_ffff,
-            0xffff_ffff,
-        ],
+        15 => (0..1usize << 15).filter_map(|idx| lrle_color(conf, idx)).collect(),
+        7 => (0..128).filter_map(|idx| lrle_color(conf, idx)).collect(),
+        4 => COLORS_4.to_vec(),
         _ => vec![0xff00_0000],
     }
 }
@@ -112,17 +125,6 @@ pub(crate) fn decode_lrle_rect(
 ) -> Result<()> {
     let subencoding = ((rectangle.encoding as u32 >> 12) & 0xf) as usize;
     let conf = lrle_config(subencoding)?;
-    let greys = lrle_greys(conf.grey_depth);
-    // Build the (up to 32k-entry) color table only when a run path needs it.
-    let owned_colors;
-    let colors: &[u32] = if conf.map {
-        &[]
-    } else if conf.grey {
-        &greys
-    } else {
-        owned_colors = lrle_colors(&conf);
-        &owned_colors
-    };
     let mut reader = Cursor::new(rectangle.data.as_slice());
     let width = rectangle.width as usize;
     let height = rectangle.height as usize;
@@ -137,7 +139,6 @@ pub(crate) fn decode_lrle_rect(
                     framebuffer,
                     &mut reader,
                     rectangle,
-                    &greys,
                     conf.grey_depth,
                     tile_x,
                     tile_y,
@@ -150,8 +151,6 @@ pub(crate) fn decode_lrle_rect(
                 framebuffer,
                 &mut reader,
                 rectangle,
-                colors,
-                &greys,
                 &conf,
                 &mut previous,
                 tile_x,
@@ -169,8 +168,6 @@ fn decode_lrle_run(
     framebuffer: &mut Framebuffer,
     reader: &mut Cursor<&[u8]>,
     rectangle: &FramebufferRectangle,
-    colors: &[u32],
-    greys: &[u32],
     conf: &LrleConfig,
     previous: &mut [u32],
     tile_x: usize,
@@ -198,14 +195,12 @@ fn decode_lrle_run(
             copy = false;
             if conf.depth <= 3 {
                 let index = (code & 7) as usize;
-                color = *colors
-                    .get(index)
+                color = lrle_color(conf, index)
                     .ok_or_else(|| eyre!("invalid LRLE compact color index {index}"))?;
                 run = (code >> 3) as usize;
             } else {
                 let index = (code & 0xf) as usize;
-                color = *colors
-                    .get(index)
+                color = lrle_color(conf, index)
                     .ok_or_else(|| eyre!("invalid LRLE compact color index {index}"))?;
                 run = (code >> 4) as usize;
             }
@@ -217,16 +212,14 @@ fn decode_lrle_run(
                     } else {
                         code as usize
                     };
-                    color = *colors
-                        .get(index)
+                    color = lrle_color(conf, index)
                         .ok_or_else(|| eyre!("invalid LRLE color index {index}"))?;
                     run = 0;
                     copy = false;
                 }
                 2 => {
                     let index = (code & 0x3f) as usize;
-                    color = *greys
-                        .get(index)
+                    color = grey_color(conf.grey_depth, index)
                         .ok_or_else(|| eyre!("invalid LRLE grey index {index}"))?;
                     run = 0;
                     copy = false;
@@ -267,7 +260,6 @@ fn decode_lrle_map(
     framebuffer: &mut Framebuffer,
     reader: &mut Cursor<&[u8]>,
     rectangle: &FramebufferRectangle,
-    greys: &[u32],
     grey_depth: usize,
     tile_x: usize,
     tile_y: usize,
@@ -288,8 +280,7 @@ fn decode_lrle_map(
             let byte = read_u8(reader)?;
             for j in 0..chunk {
                 let index = ((u32::from(byte) >> ((chunk - 1 - j) * grey_depth)) & mask) as usize;
-                let color = *greys
-                    .get(index)
+                let color = grey_color(grey_depth, index)
                     .ok_or_else(|| eyre!("invalid LRLE map grey index {index}"))?;
                 framebuffer.put_pixel(
                     rectangle.x as usize + tile_x + col + j,
