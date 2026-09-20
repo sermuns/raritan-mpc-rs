@@ -1,7 +1,7 @@
 //! End-to-end video session orchestration shared by the CLI and GUI:
-//! RDM login → credentials → RFB handshake → pump, with the event session
-//! opened alongside. The GUI keeps one login for its lifetime
-//! ([`ControlLink`]); the CLI logs in per run ([`establish_video`]).
+//! RDM login → credentials → RFB handshake → pump. The GUI keeps one
+//! login for its lifetime ([`ControlLink`]); the CLI logs in per run
+//! ([`establish_video`]).
 
 pub mod control;
 
@@ -57,8 +57,8 @@ pub fn find_port<'a>(ports: &'a [Port], selector: &str) -> eyre::Result<&'a Port
 }
 
 /// A video session owning its own RDM login (the CLI path). The RDM
-/// connection must outlive the video: the switch reaps the session (event
-/// socket first, then RFB) once its owner disconnects or idles.
+/// connection must outlive the video: the switch reaps the session once
+/// its owner disconnects or idles.
 pub struct VideoSession {
     pub rdm: RdmClient,
     pub rfb: RfbStream<TcpStream>,
@@ -111,9 +111,8 @@ pub fn connect_video(
     Ok(rfb)
 }
 
-/// Opens the full video path with its own login (RDM → credentials → RFB
-/// → event session). The TR grant (cmd 55) is skipped — the switch never
-/// answers it.
+/// Opens the full video path with its own login (RDM → credentials → RFB).
+/// The TR grant (cmd 55) is skipped — the switch never answers it.
 ///
 /// `cancelled` is polled between stages: a superseded connect stops
 /// within one stage instead of finishing every handshake. Each stage is
@@ -139,10 +138,6 @@ pub fn establish_video(
         .session_credentials()
         .map(|(id, key)| SessionCreds::new(id, key))?;
     let rfb = connect_video(&config.host, &creds, port_id, cancelled)?;
-    // The Java client holds the event session while video runs; video works
-    // without it, so it is opened off the critical path (its TLS handshake
-    // is ~2 s of connect time) and failures only warn.
-    rdm.spawn_event_session(&creds.session_id, &creds.session_key);
     Ok(VideoSession { rdm, rfb })
 }
 
@@ -162,7 +157,6 @@ pub fn video_from_client(
         .map(|(id, key)| SessionCreds::new(id, key))?;
     let host = rdm.host().to_owned();
     let rfb = connect_video(&host, &creds, port_id, cancelled)?;
-    rdm.spawn_event_session(&creds.session_id, &creds.session_key);
     Ok(VideoSession { rdm, rfb })
 }
 

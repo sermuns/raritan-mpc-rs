@@ -1,10 +1,9 @@
 //! Long-lived RDM control connection, like the Java client's single
-//! `TRConnection`: one login per program run, credentials fetched once, the
-//! event session held, a keepalive query when idle. Port enumeration and
-//! video credentials are requests served over a channel, so nothing else
-//! ever logs in. (Each extra login is a TLS 1.0 handshake the switch
-//! serialises, and its logout is a session reap right next to the live
-//! video session.)
+//! `TRConnection`: one login per program run, credentials fetched once, a
+//! keepalive query when idle. Port enumeration and video credentials are
+//! requests served over a channel, so nothing else ever logs in. (Each
+//! extra login is a TLS 1.0 handshake the switch serialises, and its
+//! logout is a session reap right next to the live video session.)
 
 use crate::ConnectionConfig;
 use raritan_common::SessionCreds;
@@ -117,9 +116,6 @@ impl Control {
         debug!(host = %config.host, "opening RDM control connection");
         let mut client = RdmClient::connect(&config.host, &config.user, &config.password)?;
         client.fetch_session_credentials()?;
-        let creds = session_creds(&client)?;
-        // Held for the connection's lifetime, like the Java event loop.
-        client.spawn_event_session(&creds.session_id, &creds.session_key);
         Ok(client)
     }
 
