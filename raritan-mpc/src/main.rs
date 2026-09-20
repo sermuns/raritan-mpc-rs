@@ -1350,13 +1350,12 @@ impl eframe::App for MpcApp {
                     ui.strong(&port_name);
                     if self.cmd_tx.is_some() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Session group (rightmost)
                             if ui.button("× Disconnect").clicked() {
                                 // Drop our channel ends; the worker exits on its next failed send.
                                 self.disconnect_video();
                                 "Disconnected".clone_into(&mut self.connection_status);
                             }
-                            // Restart the video session on this port (same
-                            // path as re-clicking it in the sidebar).
                             if ui
                                 .button("↻ Reconnect")
                                 .on_hover_text("Restart the video session on this port")
@@ -1365,9 +1364,10 @@ impl eframe::App for MpcApp {
                             {
                                 self.start_video(&port);
                             }
-                            if ui.button("⌨ Paste text").on_hover_text("Paste text as keystrokes to the selected port").clicked() {
-                                self.paste_text.clear();
-                                self.paste_open = true;
+                            ui.separator();
+                            // Input group — keyboard actions to the remote
+                            if ui.button("⌨ Ctrl+Alt+Del").clicked() {
+                                self.confirm_cad = true;
                             }
                             egui::ComboBox::from_id_salt("tty_combo")
                                 .selected_text("🖥 Change TTY")
@@ -1383,23 +1383,24 @@ impl eframe::App for MpcApp {
                                         }
                                     }
                                 });
-                            if ui.button("⌨ Ctrl+Alt+Del").clicked() {
-                                self.confirm_cad = true;
+                            if ui.button("⌨ Paste text").on_hover_text("Paste text as keystrokes to the selected port").clicked() {
+                                self.paste_text.clear();
+                                self.paste_open = true;
                             }
-                            // Manual video actions, mirroring the Java client
-                            // (setting 18 = auto-sense, 19 = calibration).
+                            ui.separator();
+                            // Video group — tuning the picture
                             for (label, setting, waiting, hover) in [
-                                (
-                                    "◎ Auto-adjust video",
-                                    18,
-                                    "Auto-sensing video…",
-                                    "Re-detect the target's video signal and tune sampling",
-                                ),
                                 (
                                     "🎨 Calibrate color",
                                     19,
                                     "Calibrating color…",
                                     "Re-tune the color gains and offsets",
+                                ),
+                                (
+                                    "◎ Auto-adjust video",
+                                    18,
+                                    "Auto-sensing video…",
+                                    "Re-detect the target's video signal and tune sampling",
                                 ),
                             ] {
                                 if ui.button(label).on_hover_text(hover).clicked()
