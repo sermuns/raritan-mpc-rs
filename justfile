@@ -26,3 +26,6 @@ install:
 push:
     git push
     git push --tags
+
+watch:
+    watchexec --exts rs --restart -- cargo run
