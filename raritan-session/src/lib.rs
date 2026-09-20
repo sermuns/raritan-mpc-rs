@@ -146,6 +146,26 @@ pub fn establish_video(
     Ok(VideoSession { rdm, rfb })
 }
 
+/// Like [`establish_video`] but reuses an existing [`RdmClient`] (e.g. one
+/// that already enumerated ports). Saves one full TLS 1.0 handshake (~2 s
+/// on the switch, which serialises handshakes) compared to `establish_video`.
+pub fn video_from_client(
+    mut rdm: RdmClient,
+    port_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> eyre::Result<VideoSession> {
+    // `fetch_session_credentials` is idempotent — reuses existing creds if present.
+    check_cancel(cancelled, "RDM credentials")?;
+    rdm.fetch_session_credentials()?;
+    let creds = rdm
+        .session_credentials()
+        .map(|(id, key)| SessionCreds::new(id, key))?;
+    let host = rdm.host().to_owned();
+    let rfb = connect_video(&host, &creds, port_id, cancelled)?;
+    rdm.spawn_event_session(&creds.session_id, &creds.session_key);
+    Ok(VideoSession { rdm, rfb })
+}
+
 /// Reads `n` framebuffer updates into a fresh RGB565 framebuffer.
 /// Non-update messages don't count toward `n`; returns the framebuffer,
 /// encodings seen, and total rect count.

@@ -93,6 +93,10 @@ impl RdmClient {
         })
     }
 
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
     pub fn switch_info(&self) -> &SwitchInfo {
         &self.switch_info
     }

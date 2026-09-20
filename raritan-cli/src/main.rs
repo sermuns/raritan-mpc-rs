@@ -1,7 +1,7 @@
 use clap::Parser;
 use raritan_rdm::RdmClient;
 use raritan_session::{
-    ConnectionConfig, capture_frames, encode_ppm, establish_video, find_port, is_black,
+    capture_frames, encode_ppm, find_port, is_black, video_from_client,
 };
 use tracing::{debug, info, warn};
 
@@ -85,15 +85,9 @@ fn main() -> color_eyre::Result<()> {
     let port = find_port(&ports, &selector)?;
     debug!(id = %port.id, name = ?port.name, "selected port for headless capture");
     let port_id = port.id.clone();
-    drop(client);
-
-    let config = ConnectionConfig {
-        host: args.host.clone(),
-        user: args.user.clone(),
-        password: args.password.clone(),
-    };
-    // `session` holds the RDM control connection open for the capture.
-    let mut session = establish_video(&config, &port_id, &|| false)?;
+    // Reuse the existing RDM control connection — avoids a second TLS 1.0
+    // handshake (~2 s on the switch, which serialises handshakes).
+    let mut session = video_from_client(client, &port_id, &|| false)?;
     let (framebuffer, seen_encodings, total_rects) = capture_frames(&mut session.rfb, args.frames)?;
     info!(?seen_encodings, total_rects, "capture finished");
 
