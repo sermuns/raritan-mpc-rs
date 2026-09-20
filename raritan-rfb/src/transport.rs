@@ -1,7 +1,7 @@
 //! `RfbStream` transport: TCP connect, plaintext vs legacy-TLS setup,
 //! and framebuffer update requests.
 
-use crate::stream::RfbStream;
+use crate::RfbStream;
 use eyre::{Result, WrapErr, bail};
 use openssl::ssl::SslStream;
 use raritan_common::{
@@ -12,7 +12,7 @@ use std::{
     io::{Read, Write},
     net::TcpStream,
 };
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::proto::FB_UPDATE_REQUEST;
 
@@ -91,7 +91,7 @@ impl RfbStream<TcpStream> {
 
     /// Legacy CSC + TLS + RC4 setup, for switches requiring SSL.
     fn connect_tls_channel(host: &str, session_id: &str) -> Result<SslStream<TcpStream>> {
-        info!(%host, "connecting to RFP CSC channel");
+        debug!(%host, "connecting to RFP CSC channel");
         let mut socket = TcpStream::connect((host, DEFAULT_RFB_PORT))
             .wrap_err_with(|| format!("connecting to {host}:{DEFAULT_RFB_PORT}"))?;
         socket.set_nodelay(true)?;

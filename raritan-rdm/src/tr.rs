@@ -9,7 +9,7 @@ use std::{
     io::{Read, Write},
     net::TcpStream,
 };
-use tracing::{debug, info};
+use tracing::debug;
 
 pub const TR_PING: u8 = 3;
 pub const TR_PING_ALT: u8 = 2;
@@ -49,7 +49,7 @@ pub fn probe_ping(stream: &mut SslStream<TcpStream>) -> bool {
         let _ = stream.flush();
         match read_tr_command(stream) {
             Ok(response) => {
-                info!(
+                debug!(
                     length = response.len(),
                     command = response.get(2).copied(),
                     packet = response.get(3).copied(),
@@ -59,7 +59,7 @@ pub fn probe_ping(stream: &mut SslStream<TcpStream>) -> bool {
                 return true;
             }
             Err(error) => {
-                info!(packet_id, error = %format!("{error:#}"), "TR ping unanswered");
+                debug!(packet_id, error = %format!("{error:#}"), "TR ping unanswered");
             }
         }
     }
@@ -85,7 +85,7 @@ pub fn request_video_grant(
     force: bool,
     timeout: std::time::Duration,
 ) -> eyre::Result<u8> {
-    info!(%portal, %target, force, "requesting video stream");
+    debug!(%portal, %target, force, "requesting video stream");
     let xml = if force {
         format!(
             r#"<Connect ForceConnection="1"><Portal>{}</Portal><Target>{}</Target></Connect>"#,
@@ -153,7 +153,7 @@ pub fn request_video_grant(
                 .get(4)
                 .copied()
                 .ok_or_eyre("video-stream response did not contain device ID")?;
-            info!(device_id, "video stream granted");
+            debug!(device_id, "video stream granted");
             return Ok(device_id);
         }
     }

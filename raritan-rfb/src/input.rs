@@ -11,8 +11,8 @@
 //! keyed by Java key code + location (1 = standard, 2 = left, 3 = right, 4 = numpad).
 
 use crate::{
+    RfbStream,
     proto::{KEY_EVENT, POINTER_EVENT},
-    stream::RfbStream,
 };
 use eyre::{Result, bail};
 use std::io::{Read, Write};

@@ -2,6 +2,7 @@
 //! (`RfbHandlerV01_29`) and truth.pcapng stream 4.
 
 use crate::{
+    RfbStream,
     framebuffer::PixelFormat,
     proto::{
         ASSOCIATED_TAG, AUTH_CAPS, AUTH_METHOD_RDM_SESSION, AUTH_SUCCESSFUL, CHALLENGE_RESPONSE,
@@ -10,7 +11,6 @@ use crate::{
         SET_CONNECTION_PARAMETER, SET_ENCODINGS, SET_PIXEL_FORMAT, UTF8_STRING,
         VIDEO_SETTINGS_REQUEST, default_encodings,
     },
-    stream::RfbStream,
 };
 use eyre::{Result, bail};
 use raritan_common::{SessionCreds, read_i32, read_u8};
@@ -40,7 +40,7 @@ impl<S: Read + Write> RfbStream<S> {
             bail!("expected RFB auth capabilities, got {auth_type}");
         }
         let capabilities = read_u8(&mut self.stream)?;
-        info!(capabilities, "received RFB authentication capabilities");
+        debug!(capabilities, "received RFB authentication capabilities");
         if (capabilities & AUTH_METHOD_RDM_SESSION) == 0 {
             bail!("RFB server does not offer RDM-session authentication");
         }

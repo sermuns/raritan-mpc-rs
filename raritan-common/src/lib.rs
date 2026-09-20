@@ -3,8 +3,6 @@
 
 pub mod crypto;
 pub mod csc;
-pub mod io;
-pub mod net;
 pub mod tls;
 pub mod xml;
 
@@ -12,13 +10,47 @@ pub use crypto::{
     current_time_millis, decode_base64, encode_base64, event_probe, rc4, time_xored_probe,
 };
 pub use csc::{display_xml, read_frame, write_frame};
-pub use io::{read_i32, read_u8, read_u16, read_u32};
-pub use net::{
-    DEFAULT_RDM_PORT, DEFAULT_RFB_PORT, EVENT_DRAIN_TIMEOUT, RDM_READ_TIMEOUT,
-    TR_GRANT_POLL_TIMEOUT, TR_GRANT_TIMEOUT,
-};
 pub use tls::tls_connector;
 pub use xml::{escape_xml, xml_attribute};
+
+// -- Ports and timeouts (previously net.rs) --
+
+/// RDM control channel (CSC + TLS 1.0).
+pub const DEFAULT_RDM_PORT: u16 = 5000;
+/// RFB video channel (usually plaintext) + short TLS sessions.
+pub const DEFAULT_RFB_PORT: u16 = 443;
+
+pub const RDM_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long the legacy TR grant waits (Java `TRRSP::CONNECT_TIMEOUT` ≈ 20 s).
+pub const TR_GRANT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+pub const EVENT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+pub const TR_GRANT_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+// -- Big-endian scalar readers (previously io.rs) --
+
+pub fn read_u8<R: std::io::Read>(reader: &mut R) -> eyre::Result<u8> {
+    let mut value = [0; 1];
+    reader.read_exact(&mut value)?;
+    Ok(value[0])
+}
+
+pub fn read_u16<R: std::io::Read>(reader: &mut R) -> eyre::Result<u16> {
+    let mut value = [0; 2];
+    reader.read_exact(&mut value)?;
+    Ok(u16::from_be_bytes(value))
+}
+
+pub fn read_u32<R: std::io::Read>(reader: &mut R) -> eyre::Result<u32> {
+    let mut value = [0; 4];
+    reader.read_exact(&mut value)?;
+    Ok(u32::from_be_bytes(value))
+}
+
+pub fn read_i32<R: std::io::Read>(reader: &mut R) -> eyre::Result<i32> {
+    let mut value = [0; 4];
+    reader.read_exact(&mut value)?;
+    Ok(i32::from_be_bytes(value))
+}
 
 /// RDM session credential pair (`"id":"key"` on the RFB wire).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -11,11 +11,7 @@ pub use raritan_common::SessionCreds;
 use eyre::OptionExt;
 use raritan_rdm::{Port, RdmClient};
 use raritan_rfb::{Framebuffer, PixelFormat, RfbStream};
-use std::{
-    io::{Read, Write},
-    net::TcpStream,
-    time::{Duration, Instant},
-};
+use std::{net::TcpStream, time::{Duration, Instant}};
 use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
@@ -68,41 +64,7 @@ pub struct VideoSession {
     pub rfb: RfbStream<TcpStream>,
 }
 
-/// Java `PingTimer`: RFB ping request every 20 s.
 pub const RFB_PING_INTERVAL: Duration = Duration::from_secs(20);
-
-/// Client-side RFB ping (Java `PingTimer`). Call [`RfbPinger::tick`] from
-/// the pump loop at least every few seconds.
-pub struct RfbPinger {
-    last: Instant,
-    serial: u32,
-}
-
-impl Default for RfbPinger {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RfbPinger {
-    pub fn new() -> Self {
-        Self {
-            last: Instant::now(),
-            serial: 0,
-        }
-    }
-
-    pub fn tick<S: Read + Write>(&mut self, rfb: &mut RfbStream<S>) -> eyre::Result<()> {
-        if self.last.elapsed() < RFB_PING_INTERVAL {
-            return Ok(());
-        }
-        self.serial = self.serial.wrapping_add(1);
-        debug!(serial = self.serial, "sending RFB ping request");
-        rfb.write_ping_request(self.serial)?;
-        self.last = Instant::now();
-        Ok(())
-    }
-}
 
 /// Returned by [`establish_video`] when `cancelled` fired between stages.
 /// Callers should exit quietly (no retry, no error shown).
@@ -135,7 +97,7 @@ pub fn connect_video(
     cancelled: &dyn Fn() -> bool,
 ) -> eyre::Result<RfbStream<TcpStream>> {
     check_cancel(cancelled, "RFB connect")?;
-    info!(%port_id, "connecting RFB session");
+    debug!(%port_id, "connecting RFB session");
     let started = Instant::now();
     let mut rfb = RfbStream::connect_raritan(host, &creds.session_id, &creds.session_key, port_id)?;
     info!(
@@ -162,7 +124,7 @@ pub fn establish_video(
     port_id: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> eyre::Result<VideoSession> {
-    info!(%port_id, "connecting RDM video session");
+    debug!(%port_id, "connecting RDM video session");
     let started = Instant::now();
     check_cancel(cancelled, "RDM login")?;
     // Only credentials are needed here, not the inventory.
@@ -206,7 +168,7 @@ fn capture_frames_inner(
     let (width, height) = rfb
         .framebuffer_size()
         .ok_or_eyre("no framebuffer dimensions")?;
-    info!(width, height, "handshake complete");
+    debug!(width, height, "handshake complete");
     let mut framebuffer = Framebuffer::try_new(width, height)?;
     let mut seen_encodings = std::collections::HashSet::new();
     let mut total_rects = 0usize;
@@ -229,7 +191,7 @@ fn capture_frames_inner(
             .framebuffer_size()
             .ok_or_eyre("framebuffer dimensions lost")?;
         if framebuffer.width != width || framebuffer.height != height {
-            info!(width, height, "framebuffer resized; recreating buffer");
+            debug!(width, height, "framebuffer resized; recreating buffer");
             framebuffer = Framebuffer::try_new(width, height)?;
         }
         for rect in &update.rectangles {
@@ -246,7 +208,7 @@ fn capture_frames_inner(
         );
         rfb.request_framebuffer_update(true)?;
     }
-    info!(?seen_encodings, total_rects, "capture finished");
+    debug!(?seen_encodings, total_rects, "capture finished");
     Ok((framebuffer, seen_encodings, total_rects))
 }
 

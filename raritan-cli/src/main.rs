@@ -3,7 +3,7 @@ use raritan_rdm::RdmClient;
 use raritan_session::{
     ConnectionConfig, capture_frames, encode_ppm, establish_video, find_port, is_black,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const DEFAULT_USER: &str = "admin";
 const DEFAULT_PASSWORD: &str = "admin";
@@ -48,7 +48,7 @@ fn main() -> color_eyre::Result<()> {
     if args.ping_pre_auth {
         let mut client = RdmClient::connect_unauthed(&args.host)?;
         let pinged = client.probe_ping();
-        info!(pinged, "pre-auth TR ping probe finished");
+        debug!(pinged, "pre-auth TR ping probe finished");
         return Ok(());
     }
     let mut client = RdmClient::connect(&args.host, &args.user, &args.password)?;
@@ -83,7 +83,7 @@ fn main() -> color_eyre::Result<()> {
         return Ok(());
     };
     let port = find_port(&ports, &selector)?;
-    info!(id = %port.id, name = ?port.name, "selected port for headless capture");
+    debug!(id = %port.id, name = ?port.name, "selected port for headless capture");
     let port_id = port.id.clone();
     drop(client);
 

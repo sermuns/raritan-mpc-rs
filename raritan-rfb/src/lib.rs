@@ -9,13 +9,19 @@ pub mod input;
 pub mod lrle;
 pub mod proto;
 pub mod pump;
-pub mod stream;
 pub mod transport;
+
+use std::collections::VecDeque;
+
+pub struct RfbStream<S> {
+    pub(crate) stream: S,
+    pub(crate) framebuffer_size: Option<(u16, u16)>,
+    pub(crate) pending_updates: VecDeque<framebuffer::FramebufferUpdate>,
+}
 
 pub use framebuffer::{Framebuffer, FramebufferRectangle, FramebufferUpdate, PixelFormat};
 pub use input::{VideoCommand, eric_code};
 pub use pump::{Incoming, UpdateHeader};
-pub use stream::RfbStream;
 
 #[cfg(test)]
 mod tests {

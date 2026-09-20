@@ -1,6 +1,4 @@
 pub mod client;
-pub mod event;
-pub mod handshake;
 pub mod model;
 pub mod tr;
 

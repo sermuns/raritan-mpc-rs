@@ -2,6 +2,7 @@
 //! changes, framebuffer updates, and skipping everything else.
 
 use crate::{
+    RfbStream,
     framebuffer::{FramebufferRectangle, FramebufferUpdate, MAX_FRAMEBUFFER_BYTES, PixelFormat},
     proto::{
         ACK_PIXEL_FORMAT, BANDWIDTH_REPLY, BANDWIDTH_REQUEST, CONNECTION_PARAMETERS,
@@ -11,13 +12,12 @@ use crate::{
         USB_PROFILE_LIST, USER_NOTIFICATION, UTF8_STRING, VIDEO_QUALITY_S2C, VIDEO_SETTINGS_S2C,
         VIRTUAL_MEDIA_CONFIG, VM_MOUNTS_RESPONSE, VM_SHARE_TABLE,
     },
-    stream::RfbStream,
 };
 use eyre::{Result, bail, eyre};
 use flate2::read::ZlibDecoder;
 use raritan_common::{read_i32, read_u8, read_u16, read_u32};
 use std::io::{Read, Write};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 /// Header of a framebuffer update (type byte already consumed).
 #[derive(Debug, Clone, Copy)]
@@ -45,17 +45,7 @@ const MAX_SKIP_BYTES: usize = 1024 * 1024;
 const MAX_RC_MESSAGE_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn validate_framebuffer_dimensions(width: u16, height: u16) -> Result<()> {
-    if width == 0 || height == 0 {
-        bail!("invalid framebuffer dimensions: {width}x{height}");
-    }
-    let len = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or_else(|| eyre!("framebuffer dimensions overflow: {width}x{height}"))?;
-    if len > MAX_FRAMEBUFFER_BYTES {
-        bail!("framebuffer dimensions too large: {width}x{height}");
-    }
-    Ok(())
+    crate::framebuffer::Framebuffer::try_new(width, height).map(|_| ())
 }
 
 impl<S: Read + Write> RfbStream<S> {
@@ -99,7 +89,7 @@ impl<S: Read + Write> RfbStream<S> {
             }
             SERVER_FB_FORMAT => {
                 let (width, height, _) = self.read_server_fb_format()?;
-                info!(width, height, "framebuffer format changed");
+                debug!(width, height, "framebuffer format changed");
                 self.framebuffer_size = Some((width, height));
                 Ok(Incoming::Handled)
             }

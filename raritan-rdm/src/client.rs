@@ -1,17 +1,19 @@
 use crate::{
-    event::csc_test2,
-    handshake::{csc_auth, csc_start_session},
     model::{SessionResponse, SwitchInfo, parse_ports, parse_switch_info},
     tr::{probe_ping as tr_probe_ping, request_video_grant},
 };
-use eyre::{Context, OptionExt};
+use eyre::{Context, OptionExt, bail};
 use openssl::ssl::SslStream;
 use quick_xml::de::from_str;
 use raritan_common::{
-    DEFAULT_RDM_PORT, EVENT_DRAIN_TIMEOUT, RDM_READ_TIMEOUT, TR_GRANT_TIMEOUT, display_xml,
-    escape_xml, read_frame, tls_connector,
+    DEFAULT_RDM_PORT, EVENT_DRAIN_TIMEOUT, RDM_READ_TIMEOUT, TR_GRANT_TIMEOUT,
+    decode_base64, display_xml, encode_base64, escape_xml, event_probe, rc4, read_frame,
+    tls_connector, write_frame, xml_attribute,
 };
-use std::net::TcpStream;
+use std::{
+    io::{Read, Write},
+    net::TcpStream,
+};
 use tracing::{debug, info, warn};
 
 const SELECT_IP_REACH_PORTS: &str = "<Database><Get><Select>/System/Device[@Type='IP-Reach']/Port</Select><Nodes>*</Nodes><SubNodes>*</SubNodes></Get></Database>";
@@ -127,7 +129,7 @@ impl RdmClient {
             debug!("reusing RDM session credentials");
             return Ok(());
         }
-        info!("requesting RDM session credentials");
+        debug!("requesting RDM session credentials");
         let session: SessionResponse = from_str(&self.database_query(SELECT_SESSION_ID)?)?;
         let data = session.get_session_id;
         self.session_id = Some(
@@ -136,7 +138,7 @@ impl RdmClient {
                 .ok_or_eyre("response did not contain SessionID")?,
         );
         self.session_key = data.session_key.or(data.session_key_element);
-        info!(
+        debug!(
             session_id_present = self.session_id.is_some(),
             session_key_present = self.session_key.is_some(),
             "received RDM session credentials"
@@ -218,22 +220,22 @@ impl RdmClient {
     }
 
     fn open_event_session_on(host: &str, session_id: &str, session_key: &str) -> eyre::Result<()> {
-        info!(%session_id, "opening RDM event session");
+        debug!(%session_id, "opening RDM event session");
         let mut socket = Self::tcp_connect(host)?;
         csc_start_session(&mut socket, "RDMEvent", Some(session_id))?;
         let mut tls = Self::tls_upgrade(host, socket)?;
         csc_test2(&mut tls, session_key)?;
-        info!("RDM event session established");
+        debug!("RDM event session established");
         // NOTE: detached drain thread owns the event socket, so each
         // `establish_video` attempt opens one more session.
         std::thread::spawn(move || {
             if let Err(error) = tls.get_ref().set_read_timeout(Some(EVENT_DRAIN_TIMEOUT)) {
-                info!(error = %format!("{error:#}"), "RDM event drain: cannot set read timeout; exiting");
+                debug!(error = %format!("{error:#}"), "RDM event drain: cannot set read timeout; exiting");
                 return;
             }
             loop {
                 match read_frame(&mut tls) {
-                    Ok(frame) => info!(
+                    Ok(frame) => debug!(
                         length = frame.len(),
                         payload = %display_xml(&frame),
                         "RDM event",
@@ -250,7 +252,7 @@ impl RdmClient {
                                 )
                             });
                         if !idle {
-                            info!(error = %format!("{error:#}"), "RDM event session closed");
+                            debug!(error = %format!("{error:#}"), "RDM event session closed");
                             return;
                         }
                     }
@@ -280,4 +282,77 @@ impl RdmClient {
     ) -> eyre::Result<u8> {
         request_video_grant(&mut self.stream, portal, target, force, TR_GRANT_TIMEOUT)
     }
+}
+
+// --- CSC handshake (previously handshake.rs) ---
+
+fn csc_start_session<S: Read + Write>(
+    stream: &mut S,
+    protocol: &str,
+    session_id: Option<&str>,
+) -> eyre::Result<Vec<u8>> {
+    let greeting = read_frame(stream).wrap_err("reading CSC greeting")?;
+    if !greeting.starts_with(b"<CSC") {
+        bail!("unexpected CSC greeting: {}", display_xml(&greeting));
+    }
+    write_frame(stream, "<CSC_Ack/>").wrap_err("writing CSC ack")?;
+    let info = read_frame(stream).wrap_err("reading CSC info")?;
+    if !info.starts_with(b"<CSC_Info") {
+        bail!("unexpected CSC info: {}", display_xml(&info));
+    }
+    let start = match session_id {
+        Some(id) => format!(
+            r#"<CSC_Start_Session ProtocolID="{protocol}" SessionID="{}"/>"#,
+            escape_xml(id)
+        ),
+        None => format!(r#"<CSC_Start_Session ProtocolID="{protocol}"/>"#),
+    };
+    write_frame(stream, &start).wrap_err("writing CSC start-session")?;
+    debug!(protocol, "CSC start-session sent");
+    Ok(info)
+}
+
+fn csc_auth<S: Read + Write>(tls: &mut S, user: &str, password: &str) -> eyre::Result<()> {
+    write_frame(
+        tls,
+        &format!(
+            r#"<CSC_Auth UserName="{}" Password="{}"/>"#,
+            escape_xml(user),
+            escape_xml(password)
+        ),
+    )
+    .wrap_err("writing CSC auth")?;
+    let auth = read_frame(tls).wrap_err("reading CSC auth response")?;
+    if !auth.starts_with(b"<CSC_Pass") {
+        bail!("authentication failed: {}", display_xml(&auth));
+    }
+    Ok(())
+}
+
+// --- CSC_Test2 event handshake (previously event.rs) ---
+
+fn csc_test2<S: Read + Write>(tls: &mut S, session_key: &str) -> eyre::Result<()> {
+    let challenge = String::from_utf8(read_frame(tls).wrap_err("reading event CSC challenge")?)?;
+    let clear_text =
+        xml_attribute(&challenge, "ClearText").ok_or_eyre("event challenge lacks ClearText")?;
+    let key = decode_base64(session_key)?;
+    let encrypted = rc4(&key, &decode_base64(&clear_text)?)?;
+    let clear = event_probe();
+    write_frame(
+        tls,
+        &format!(
+            r#"<CSC_Test2 Encrypted="{}" ClearText="{}"/>"#,
+            encode_base64(&encrypted),
+            encode_base64(&clear)
+        ),
+    )
+    .wrap_err("writing event CSC test")?;
+    let response = String::from_utf8(read_frame(tls).wrap_err("reading event CSC response")?)?;
+    debug!(length = response.len(), "received event CSC test response");
+    let echoed =
+        xml_attribute(&response, "Encrypted").ok_or_eyre("event response lacks Encrypted")?;
+    if rc4(&key, &decode_base64(&echoed)?)? != clear {
+        bail!("RDM event session authentication failed");
+    }
+    Ok(())
 }

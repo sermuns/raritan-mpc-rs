@@ -14,7 +14,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 /// Java `TRKeepAliveThread`: 58 s "not responding" limit, ping at half.
 pub const RDM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(29);
@@ -106,7 +106,7 @@ impl Control {
                 }
                 Err(RecvTimeoutError::Timeout) => self.keepalive(),
                 Err(RecvTimeoutError::Disconnected) => {
-                    info!(host = %self.config.host, "closing RDM control connection");
+                    debug!(host = %self.config.host, "closing RDM control connection");
                     return;
                 }
             }
@@ -114,7 +114,7 @@ impl Control {
     }
 
     fn connect(config: &ConnectionConfig) -> eyre::Result<RdmClient> {
-        info!(host = %config.host, "opening RDM control connection");
+        debug!(host = %config.host, "opening RDM control connection");
         let mut client = RdmClient::connect(&config.host, &config.user, &config.password)?;
         client.fetch_session_credentials()?;
         let creds = session_creds(&client)?;

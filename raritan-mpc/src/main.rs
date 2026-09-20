@@ -2,9 +2,7 @@ use clap::Parser;
 use eframe::egui;
 use raritan_rdm::{Port, SwitchInfo};
 use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
-use raritan_session::{
-    Cancelled, ConnectionConfig, ControlLink, PortsResult, RfbPinger, connect_video,
-};
+use raritan_session::{Cancelled, ConnectionConfig, ControlLink, PortsResult, connect_video};
 use std::{
     sync::{
         Arc,
@@ -14,7 +12,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Default switch address; editable in the UI and persisted.
@@ -117,7 +115,7 @@ fn main() -> eframe::Result {
         }))
         .with_target(false)
         .init();
-    info!("starting Raritan MPC");
+    debug!("starting Raritan MPC");
     let args = Args::parse();
     let mut viewport = egui::ViewportBuilder::default();
     if let Some(icon) = load_app_icon() {
@@ -205,23 +203,6 @@ struct WorkerFlags {
 impl WorkerFlags {
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
-    }
-}
-
-/// Marks the worker as connecting until dropped, so every exit path of a
-/// session attempt (including `?` returns) clears the flag.
-struct ConnectingGuard<'a>(&'a WorkerFlags);
-
-impl<'a> ConnectingGuard<'a> {
-    fn new(worker: &'a WorkerFlags) -> Self {
-        worker.connecting.store(true, Ordering::Relaxed);
-        Self(worker)
-    }
-}
-
-impl Drop for ConnectingGuard<'_> {
-    fn drop(&mut self) {
-        self.0.connecting.store(false, Ordering::Relaxed);
     }
 }
 
@@ -328,7 +309,7 @@ impl MpcApp {
 
     fn start_video(&mut self, port: &Port) {
         let port_id = port.id.clone();
-        info!(%port_id, "starting framebuffer worker");
+        debug!(%port_id, "starting framebuffer worker");
         // Stop a superseded worker's connect between stages so its
         // handshakes don't compete with the new one on the switch.
         if let Some(worker) = self.worker.take() {
@@ -362,7 +343,7 @@ impl MpcApp {
                 match run_video_session(&link, &port_id, &worker, &sender, &cmd_receiver) {
                     Ok(()) => return,
                     Err(error) if error.downcast_ref::<Cancelled>().is_some() => {
-                        info!(%error, "video worker superseded; exiting");
+                        debug!(%error, "video worker superseded; exiting");
                         return;
                     }
                     Err(error) => {
@@ -375,7 +356,7 @@ impl MpcApp {
                             let message = format!(
                                 "Connection lost — retrying ({attempt}/{MAX_VIDEO_ATTEMPTS})"
                             );
-                            info!(%message, wait_secs = wait.as_secs());
+                            debug!(%message, wait_secs = wait.as_secs());
                             let _ = sender.send(FrameMessage::Status(message));
                             thread::sleep(wait);
                         } else {
@@ -424,7 +405,7 @@ impl MpcApp {
         if self.port_refresh.is_some() {
             return;
         }
-        info!(host = %self.host, "refreshing port list");
+        debug!(host = %self.host, "refreshing port list");
         self.port_refresh = Some(self.control_link().request_ports());
         self.last_refresh = Instant::now();
         "Refreshing ports".clone_into(&mut self.connection_status);
@@ -455,7 +436,7 @@ impl MpcApp {
         self.port_refresh = None;
         match result {
             Ok((ports, switch_info)) => {
-                info!(count = ports.len(), "port list refreshed");
+                debug!(count = ports.len(), "port list refreshed");
                 let selected_id = self
                     .selected_port
                     .and_then(|index| self.ports.get(index))
@@ -559,39 +540,44 @@ fn run_video_session(
     sender: &mpsc::SyncSender<FrameMessage>,
     cmd_receiver: &mpsc::Receiver<VideoCommand>,
 ) -> eyre::Result<()> {
-    let _guard = ConnectingGuard::new(worker);
-    let status = |message: &str| {
-        let _ = sender.send(FrameMessage::Status(message.to_owned()));
-        info!(%message, "framebuffer connection stage");
-    };
-    status("Requesting session credentials");
-    info!(%port_id, "connecting video session");
-    // NOTE: the TR video-stream grant (cmd 55) is skipped (never
-    // answered; RFB streams without it). The control thread holds the
-    // login and the RDM event session.
-    let creds = link.credentials().map_err(|error| eyre::eyre!(error))?;
-    status("Connecting RFB");
-    let mut rfb = connect_video(link.host(), &creds, port_id, &|| worker.cancelled())?;
-    worker.connecting.store(false, Ordering::Relaxed);
-    status("RFB connected; waiting for framebuffer");
-    let rfb = &mut rfb;
-    let (width, height) = rfb
-        .framebuffer_size()
-        .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
-    let format = PixelFormat::RGB565;
-    let mut framebuffer = Framebuffer::try_new(width, height)?;
-    // Idle polling goes through `wait_for_message`, so this only bounds a
-    // stall inside a message (a dead connection). A short timeout here used
-    // to fire mid-update and desync the stream.
-    rfb.set_read_timeout(Some(RFB_BODY_TIMEOUT))?;
-    // Keys held on the target; all are released on exit so none stays stuck down.
-    let mut held: Vec<u16> = Vec::new();
-    let result = run_pump(rfb, cmd_receiver, sender, &mut framebuffer, format, &mut held);
-    for eric in held {
-        let _ = rfb.write_key_event(eric, false);
+    worker.connecting.store(true, Ordering::Relaxed);
+    let result = (|| -> eyre::Result<()> {
+        let status = |message: &str| {
+            let _ = sender.send(FrameMessage::Status(message.to_owned()));
+            debug!(%message, "framebuffer connection stage");
+        };
+        status("Requesting session credentials");
+        debug!(%port_id, "connecting video session");
+        // NOTE: the TR video-stream grant (cmd 55) is skipped (never
+        // answered; RFB streams without it). The control thread holds the
+        // login and the RDM event session.
+        let creds = link.credentials().map_err(|error| eyre::eyre!(error))?;
+        status("Connecting RFB");
+        let mut rfb = connect_video(link.host(), &creds, port_id, &|| worker.cancelled())?;
+        worker.connecting.store(false, Ordering::Relaxed);
+        status("RFB connected; waiting for framebuffer");
+        let (width, height) = rfb
+            .framebuffer_size()
+            .ok_or_else(|| eyre::eyre!("RFB did not provide framebuffer dimensions"))?;
+        let format = PixelFormat::RGB565;
+        let mut framebuffer = Framebuffer::try_new(width, height)?;
+        // Idle polling goes through `wait_for_message`, so this only bounds a
+        // stall inside a message (a dead connection). A short timeout here used
+        // to fire mid-update and desync the stream.
+        rfb.set_read_timeout(Some(RFB_BODY_TIMEOUT))?;
+        // Keys held on the target; all are released on exit so none stays stuck down.
+        let mut held: Vec<u16> = Vec::new();
+        let inner = run_pump(&mut rfb, cmd_receiver, sender, &mut framebuffer, format, &mut held);
+        for eric in held {
+            let _ = rfb.write_key_event(eric, false);
+        }
+        // Release held mouse buttons too.
+        let _ = rfb.write_pointer_event(0, 0, 0, 0);
+        inner
+    })();
+    if result.is_err() {
+        worker.connecting.store(false, Ordering::Relaxed);
     }
-    // Release held mouse buttons too.
-    let _ = rfb.write_pointer_event(0, 0, 0, 0);
     result
 }
 
@@ -608,7 +594,8 @@ fn run_pump(
     held: &mut Vec<u16>,
 ) -> eyre::Result<()> {
     let mut dropped_frames: u64 = 0;
-    let mut pinger = RfbPinger::new();
+    let mut ping_last = Instant::now();
+    let mut ping_serial: u32 = 0;
         let mut drain = |rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>| -> eyre::Result<bool> {
             loop {
                 match cmd_receiver.try_recv() {
@@ -616,7 +603,7 @@ fn run_pump(
                     Err(mpsc::TryRecvError::Empty) => return Ok(false),
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // GUI dropped cmd_tx: exit instead of idling forever.
-                        info!("video worker: command channel closed; exiting");
+                        debug!("video worker: command channel closed; exiting");
                         return Ok(true);
                     }
                 }
@@ -633,7 +620,7 @@ fn run_pump(
             if let Some((width, height)) = size
                 && (framebuffer.width != width || framebuffer.height != height)
             {
-                info!(width, height, "framebuffer resized; recreating buffer");
+                debug!(width, height, "framebuffer resized; recreating buffer");
                 *framebuffer = Framebuffer::try_new(width, height)?;
             }
             debug!(
@@ -657,15 +644,17 @@ fn run_pump(
                     Ok(false)
                 }
                 Err(mpsc::TrySendError::Disconnected(_)) => {
-                    info!("video worker: frame receiver closed; exiting");
+                    debug!("video worker: frame receiver closed; exiting");
                     Ok(true)
                 }
             }
         };
         loop {
-            // Keeps the video channel alive (Java `PingTimer`); the control
-            // thread keeps the RDM session alive.
-            pinger.tick(rfb)?;
+            if ping_last.elapsed() >= Duration::from_secs(20) {
+                ping_serial = ping_serial.wrapping_add(1);
+                rfb.write_ping_request(ping_serial)?;
+                ping_last = Instant::now();
+            }
             if drain(rfb)? {
                 return Ok(());
             }
@@ -720,7 +709,7 @@ fn send_command(
             }
         }
         VideoCommand::VideoSettings { setting, value } => {
-            info!(setting, value, "sending video-settings event");
+            debug!(setting, value, "sending video-settings event");
             rfb.write_video_settings_event(setting, value)?;
         }
         VideoCommand::Pointer {
