@@ -199,6 +199,7 @@ struct MpcApp {
     palette_open: bool,
     palette_query: String,
     palette_selected: usize,
+    is_fullscreen: bool,
 }
 
 /// GUI ↔ video-worker flags. `cancel` stops a superseded connect between
@@ -289,6 +290,7 @@ impl MpcApp {
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
+            is_fullscreen: false,
             viewport: None,
             mouse_buttons: 0,
             last_pointer: None,
@@ -1182,6 +1184,12 @@ impl eframe::App for MpcApp {
             self.palette_query.clear();
             self.palette_selected = 0;
         }
+        // Fullscreen toggle: F11
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::F11)) {
+            self.is_fullscreen = !self.is_fullscreen;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+        }
         if let Some(receiver) = &self.frames {
             // Upload only the freshest frame; skipped uploads never display.
             // Status/Error messages are still all processed.
@@ -1570,6 +1578,23 @@ impl eframe::App for MpcApp {
                         });
                 });
         }
+
+        egui::Panel::bottom("hints").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.small(
+                    egui::RichText::new("F1 / Ctrl+P: palette  |  F11: fullscreen  |  Esc: close")
+                        .weak()
+                        .monospace(),
+                );
+                if self.cmd_tx.is_some() {
+                    ui.small(
+                        egui::RichText::new("  •  ⌨ Paste  •  🖥 TTY  •  ⌨ Ctrl+Alt+Del  •  ◎/🎨 video")
+                            .weak()
+                            .monospace(),
+                    );
+                }
+            });
+        });
 
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(index) = self.selected_port {
