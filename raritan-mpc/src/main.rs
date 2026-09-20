@@ -1243,20 +1243,28 @@ impl eframe::App for MpcApp {
             let mut should_execute: Option<usize> = None;
             // We need filtered for rendering, but query may change inside modal.
             // Recompute inside modal after editing palette_query directly to avoid one-frame lag.
-            egui::containers::Modal::new("palette_modal".into()).show(ui.ctx(), |ui| {
+            // Top-anchored window (VSCode-like) — horizontally centered, 80px from top
+            egui::Window::new("palette_modal")
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 80.0))
+                .collapsible(false)
+                .resizable(false)
+                .title_bar(false)
+                .movable(false)
+                .show(ui.ctx(), |ui| {
                 if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                     should_close = true;
                 }
                 ui.set_width(520.0);
-                ui.label(
-                    egui::RichText::new("↑/↓ navigate | Enter: run | Esc: close | F1 / Ctrl+P: toggle")
-                        .family(egui::FontFamily::Monospace)
-                        .small()
-                        .weak(),
-                );
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new("↑/↓ navigate | Enter: run | Esc: close | F1 / Ctrl+P: toggle")
+                            .family(egui::FontFamily::Monospace)
+                            .small()
+                            .weak(),
+                    );
+                });
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut self.palette_query)
-                        .hint_text("Type to filter…")
                         .desired_width(f32::INFINITY),
                 );
                 // Auto-focus when just opened
@@ -1285,7 +1293,7 @@ impl eframe::App for MpcApp {
                     should_execute = Some(*idx);
                 }
                 ui.add_space(8.0);
-                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                     if filtered.is_empty() {
                         ui.label("No matches");
                     } else {
