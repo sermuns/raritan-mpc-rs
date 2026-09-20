@@ -164,7 +164,7 @@ pub(crate) fn decode_lrle_rect(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn decode_lrle_run(
     framebuffer: &mut Framebuffer,
     reader: &mut Cursor<&[u8]>,
@@ -262,7 +262,7 @@ fn decode_lrle_run(
 
 /// Packed grey-pixel map path (`drawLRLEMap`): each byte holds
 /// `8 / grey_depth` pixels, MSB first.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn decode_lrle_map(
     framebuffer: &mut Framebuffer,
     reader: &mut Cursor<&[u8]>,

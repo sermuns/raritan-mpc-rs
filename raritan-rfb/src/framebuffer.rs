@@ -159,8 +159,6 @@ impl Framebuffer {
     }
 }
 
-// Short channel names suit the bit-twiddling below.
-#[allow(clippy::many_single_char_names)]
 pub fn rgb(value: u32, format: PixelFormat) -> u32 {
     let red = ((value >> format.red_shift) & u32::from(format.red_max)) * 255
         / u32::from(format.red_max.max(1));

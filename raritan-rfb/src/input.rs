@@ -97,7 +97,7 @@ pub fn eric_code(java_code: i32, location: i32) -> Option<u16> {
 
 // Lookup table mirroring the Java key map: one arm per entry, so identical
 // bodies are expected rather than merged.
-#[allow(clippy::too_many_lines, clippy::match_same_arms)]
+#[expect(clippy::too_many_lines, clippy::match_same_arms)]
 fn eric_by_code(java_code: i32, location: i32) -> Option<u16> {
     let eric = match (java_code, location) {
         // Top row (backquote … equals) + editing keys.

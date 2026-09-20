@@ -212,7 +212,7 @@ impl<S: Read + Write> RfbStream<S> {
     /// Unlike the Java `process*` readers (which throw on type 1), type 1 is
     /// survived: palettized reboot screens must not kill a true-color session.
     // Message-dispatch match: splitting it per message type would scatter the table.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn skip_server_message(&mut self, message_type: u8) -> Result<()> {
         trace!(message_type, "skipping RFB server message");
         match message_type {

@@ -145,7 +145,7 @@ fn main() -> eframe::Result {
 
 // Flat egui state: grouping the flags into sub-structs would add
 // indirection at every use site for no gain.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 struct MpcApp {
     /// Switch address (sidebar-editable, persisted).
     host: String,
@@ -178,6 +178,8 @@ struct MpcApp {
     /// Switch identity from `<CSC_Info>`; `None` until first enumeration.
     switch_info: Option<SwitchInfo>,
     confirm_cad: bool,
+    paste_open: bool,
+    paste_text: String,
     /// Last frame's image rect, for mapping pointer to target pixels.
     viewport: Option<egui::Rect>,
     /// Held mouse buttons (RFB mask).
@@ -273,6 +275,8 @@ impl MpcApp {
             auto_refresh: persisted.auto_refresh,
             switch_info: None,
             confirm_cad: false,
+            paste_open: false,
+            paste_text: String::new(),
             viewport: None,
             mouse_buttons: 0,
             last_pointer: None,
@@ -305,6 +309,7 @@ impl MpcApp {
         self.clear_frame_state();
         self.selected_port = None;
         self.confirm_cad = false;
+        self.paste_open = false;
     }
 
     fn start_video(&mut self, port: &Port) {
@@ -774,6 +779,89 @@ fn cad_sequence() -> Vec<VideoCommand> {
     sequence
 }
 
+/// Converts pasted text to a sequence of Eric key press/release pairs,
+/// holding shift across consecutive shifted characters (like the Java
+/// client's paste). Unknown characters are skipped.
+fn paste_sequence(text: &str) -> Vec<VideoCommand> {
+    let shift_eric = eric_code(16, 2); // left shift (41)
+    let mut out = Vec::new();
+    let mut shift_held = false;
+    for ch in text.chars() {
+        let Some((code, loc, need_shift)) = paste_char_to_java(ch) else {
+            continue;
+        };
+        if need_shift != shift_held && let Some(eric) = shift_eric {
+            out.push(VideoCommand::Key {
+                eric,
+                down: need_shift,
+            });
+            shift_held = need_shift;
+        }
+        if let Some(eric) = eric_code(code, loc) {
+            out.push(VideoCommand::Key { eric, down: true });
+            out.push(VideoCommand::Key { eric, down: false });
+        }
+    }
+    if shift_held && let Some(eric) = shift_eric {
+        out.push(VideoCommand::Key { eric, down: false });
+    }
+    out
+}
+
+fn paste_char_to_java(ch: char) -> Option<(i32, i32, bool)> {
+    // Returns (java_code, location, needs_shift). Mirrors the en_US KeyTranslator.
+    match ch {
+        'a'..='z' => Some((ch as i32 - 32, 1, false)), // 'a' (97) -> 65
+        'A'..='Z' => Some((ch as i32, 1, true)),
+        '0' => Some((48, 1, false)),
+        '1' => Some((49, 1, false)),
+        '2' => Some((50, 1, false)),
+        '3' => Some((51, 1, false)),
+        '4' => Some((52, 1, false)),
+        '5' => Some((53, 1, false)),
+        '6' => Some((54, 1, false)),
+        '7' => Some((55, 1, false)),
+        '8' => Some((56, 1, false)),
+        '9' => Some((57, 1, false)),
+        ' ' => Some((32, 1, false)),
+        '\n' | '\r' => Some((10, 1, false)),
+        '\t' => Some((9, 1, false)),
+        '-' => Some((45, 1, false)),
+        '_' => Some((45, 1, true)),
+        '=' => Some((61, 1, false)),
+        '+' => Some((61, 1, true)),
+        '[' => Some((91, 1, false)),
+        '{' => Some((91, 1, true)),
+        ']' => Some((93, 1, false)),
+        '}' => Some((93, 1, true)),
+        '\\' => Some((92, 1, false)),
+        '|' => Some((92, 1, true)),
+        ';' => Some((59, 1, false)),
+        ':' => Some((59, 1, true)),
+        '\'' => Some((222, 1, false)),
+        '"' => Some((222, 1, true)),
+        ',' => Some((44, 1, false)),
+        '<' => Some((44, 1, true)),
+        '.' => Some((46, 1, false)),
+        '>' => Some((46, 1, true)),
+        '/' => Some((47, 1, false)),
+        '?' => Some((47, 1, true)),
+        '`' => Some((192, 1, false)),
+        '~' => Some((192, 1, true)),
+        '!' => Some((49, 1, true)),
+        '@' => Some((50, 1, true)),
+        '#' => Some((51, 1, true)),
+        '$' => Some((52, 1, true)),
+        '%' => Some((53, 1, true)),
+        '^' => Some((54, 1, true)),
+        '&' => Some((55, 1, true)),
+        '*' => Some((56, 1, true)),
+        '(' => Some((57, 1, true)),
+        ')' => Some((48, 1, true)),
+        _ => None,
+    }
+}
+
 /// Maps an egui key to the (code, location) the Eric table expects.
 /// Shifted symbols map to their physical base key; Shift goes as its own event.
 fn java_key(key: egui::Key) -> Option<(i32, i32)> {
@@ -946,7 +1034,7 @@ impl eframe::App for MpcApp {
     }
 
     // Single `ui()` owns the whole frame: sidebar, top bar, and video area.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(receiver) = &self.frames {
             // Upload only the freshest frame; skipped uploads never display.
@@ -1268,6 +1356,10 @@ impl eframe::App for MpcApp {
                             {
                                 self.start_video(&port);
                             }
+                            if ui.button("📋 Paste").on_hover_text("Paste text as keystrokes to the selected port").clicked() {
+                                self.paste_text.clear();
+                                self.paste_open = true;
+                            }
                             if ui.button("⌨ Ctrl+Alt+Del").clicked() {
                                 self.confirm_cad = true;
                             }
@@ -1327,6 +1419,35 @@ impl eframe::App for MpcApp {
                                 self.confirm_cad = false;
                             }
                         });
+                    });
+                }
+                if self.paste_open {
+                    egui::containers::Modal::new("paste_modal".into()).show(ui.ctx(), |ui| {
+                        ui.heading("Paste text as keystrokes");
+                        ui.label("Text will be typed into the selected port, character by character. Use for passwords etc. (original client has this).");
+                        let edit = egui::TextEdit::multiline(&mut self.paste_text)
+                            .hint_text("Paste text here…")
+                            .desired_width(360.0)
+                            .desired_rows(4);
+                        ui.add(edit);
+                        ui.horizontal(|ui| {
+                            let can_send = !self.paste_text.is_empty() && self.cmd_tx.is_some();
+                            if ui.add_enabled(can_send, egui::Button::new("✔ Type it")).clicked() {
+                                if let Some(tx) = &self.cmd_tx {
+                                    for command in paste_sequence(&self.paste_text) {
+                                        let _ = tx.send(command);
+                                    }
+                                }
+                                self.paste_open = false;
+                            }
+                            if ui.button("× Cancel").clicked() {
+                                self.paste_open = false;
+                            }
+                        });
+                        if !self.paste_text.is_empty() {
+                            let count = paste_sequence(&self.paste_text).len() / 2;
+                            ui.small(format!("{count} keystrokes will be sent"));
+                        }
                     });
                 }
                 if let Some(texture) = &self.texture {
