@@ -1,5 +1,5 @@
 [package]
-name = "raritan-rdm"
+name = "raritan-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,11 +8,8 @@ publish.workspace = true
 [dependencies]
 eyre.workspace = true
 openssl.workspace = true
-quick-xml.workspace = true
-serde.workspace = true
-tracing.workspace = true
+percent-encoding.workspace = true
 raritan-common.workspace = true
-raritan-web.workspace = true
 
 [features]
 vendored-openssl = ["openssl/vendored"]

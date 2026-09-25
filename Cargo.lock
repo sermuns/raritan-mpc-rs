@@ -2235,6 +2235,7 @@ dependencies = [
  "openssl",
  "quick-xml 0.42.0",
  "raritan-common",
+ "raritan-web",
  "serde",
  "tracing",
 ]
@@ -2259,6 +2260,16 @@ dependencies = [
  "raritan-rdm",
  "raritan-rfb",
  "tracing",
+]
+
+[[package]]
+name = "raritan-web"
+version = "1.5.0"
+dependencies = [
+ "eyre",
+ "openssl",
+ "percent-encoding",
+ "raritan-common",
 ]
 
 [[package]]

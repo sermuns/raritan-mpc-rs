@@ -4,7 +4,7 @@ use nucleo::{
     Config as NucleoConfig, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
-use raritan_rdm::{Port, SwitchInfo};
+use raritan_rdm::{MAX_PORT_NAME_LEN, Port, SwitchInfo, rename_port};
 use raritan_rfb::{Framebuffer, PixelFormat, VideoCommand, eric_code};
 use raritan_session::{Cancelled, ConnectionConfig, ControlLink, PortsResult, connect_video};
 use std::{
@@ -184,6 +184,12 @@ struct MpcApp {
     confirm_cad: bool,
     paste_open: bool,
     paste_text: String,
+    /// Port rename dialog state; a worker thread owns the blocking
+    /// `WebUI` + RDM round-trip and reports back over a channel.
+    rename_op: Option<RenameOp>,
+    rename_open: bool,
+    /// Whether port rows show their ✏ rename buttons.
+    rename_mode: bool,
     tty_fn: u8,
     /// Last frame's image rect, for mapping pointer to target pixels.
     viewport: Option<egui::Rect>,
@@ -243,6 +249,47 @@ enum FrameMessage {
     Error(String),
 }
 
+/// Port rename dialog state. The worker thread runs `rename_port` (`WebUI`
+/// login + form POST + RDM verification, tens of seconds) and sends the
+/// outcome; the dialog polls it each frame so the UI never blocks.
+struct RenameOp {
+    port_id: String,
+    display_index: String,
+    current_name: String,
+    new_name: String,
+    /// Present while the worker runs.
+    receiver: Option<Receiver<Result<String, String>>>,
+    error: Option<String>,
+    focus_requested: bool,
+}
+
+impl RenameOp {
+    fn new(port: &Port) -> Self {
+        let current_name = port.name.clone().unwrap_or_default();
+        Self {
+            port_id: port.id.clone(),
+            display_index: port.display_index(),
+            current_name: current_name.clone(),
+            new_name: current_name,
+            receiver: None,
+            error: None,
+            focus_requested: true,
+        }
+    }
+
+    fn working(&self) -> bool {
+        self.receiver.is_some()
+    }
+}
+
+/// Dialog button pressed while the rename op is borrowed; applied after
+/// the borrow ends.
+enum RenameAction {
+    None,
+    Submit,
+    Cancel,
+}
+
 impl MpcApp {
     fn new(
         creation_context: &eframe::CreationContext<'_>,
@@ -286,6 +333,9 @@ impl MpcApp {
             confirm_cad: false,
             paste_open: false,
             paste_text: String::new(),
+            rename_op: None,
+            rename_open: false,
+            rename_mode: false,
             tty_fn: 2,
             palette_open: false,
             palette_query: String::new(),
@@ -325,6 +375,40 @@ impl MpcApp {
         self.confirm_cad = false;
         self.paste_open = false;
         self.palette_open = false;
+    }
+
+    /// Hands the rename to a worker thread: `WebUI` login + form POST + RDM
+    /// verification takes tens of seconds on this switch and must never
+    /// block the UI. The result (new name or message) arrives over the
+    /// channel polled in `update`.
+    fn submit_rename(
+        host: &str,
+        user: &str,
+        password: &str,
+        port: Option<Port>,
+        op: &mut RenameOp,
+    ) {
+        let Some(port) = port else {
+            op.error = Some("Port is no longer listed.".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        op.receiver = Some(receiver);
+        op.error = None;
+        let request = (
+            host.to_owned(),
+            user.to_owned(),
+            password.to_owned(),
+            port,
+            op.new_name.clone(),
+        );
+        thread::spawn(move || {
+            let (host, user, password, port, new_name) = request;
+            let result = rename_port(&host, &user, &password, &port, &new_name)
+                .map(|()| new_name)
+                .map_err(|error| format!("{error:#}"));
+            let _ = sender.send(result);
+        });
     }
 
     fn start_video(&mut self, port: &Port) {
@@ -1447,6 +1531,38 @@ impl eframe::App for MpcApp {
                     }
                 }
             }
+            // Collect a finished rename: success refreshes the list, failure
+            // reopens the dialog with the error.
+            let mut rename_done: Option<Result<String, String>> = None;
+            if let Some(op) = self.rename_op.as_mut()
+                && let Some(receiver) = &op.receiver
+            {
+                match receiver.try_recv() {
+                    Ok(result) => rename_done = Some(result),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        ui.ctx().request_repaint();
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        rename_done = Some(Err("rename worker stopped unexpectedly".to_owned()));
+                    }
+                }
+            }
+            match rename_done {
+                Some(Ok(name)) => {
+                    self.rename_op = None;
+                    self.rename_open = false;
+                    format!("Renamed port to {name:?}").clone_into(&mut self.connection_status);
+                    self.refresh_ports();
+                }
+                Some(Err(error)) => {
+                    if let Some(op) = self.rename_op.as_mut() {
+                        op.error = Some(error);
+                        op.receiver = None;
+                    }
+                    self.rename_open = true;
+                }
+                None => {}
+            }
             // Hug the content: widest fixed row ("Sort by:" + combo ≈ 152 pt)
             // plus margins. `max_size` enforces it: egui persists panel widths
             // and the stored value wins over the default, so a stale 220 pt
@@ -1531,6 +1647,8 @@ impl eframe::App for MpcApp {
                                 );
                             });
                     });
+                    ui.checkbox(&mut self.rename_mode, "Rename?")
+                        .on_hover_text("Show rename buttons on the port list");
                     // The spinner stays mounted (invisible when idle) so the
                     // rows below never jump when a refresh starts or stops.
                     ui.horizontal(|ui| {
@@ -1541,6 +1659,7 @@ impl eframe::App for MpcApp {
                         ui.small(format!("v{} · {}", env!("CARGO_PKG_VERSION"), short_sha()));
                     });
                     let order = self.port_order();
+                    let rename_mode = self.rename_mode;
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .show(ui, |ui| {
@@ -1608,6 +1727,33 @@ impl eframe::App for MpcApp {
                                                             ui.ctx().memory_mut(|mem| {
                                                                 mem.surrender_focus(id);
                                                             });
+                                                        }
+                                                    }
+                                                    // Pencil overlaid at the row's right edge.
+                                                    // Added last, it sits above the full-width
+                                                    // label and steals only its own clicks.
+                                                    // Only in rename mode (see "Rename?" above).
+                                                    if rename_mode {
+                                                        let row_rect = response.rect;
+                                                        let side = row_rect.height().min(26.0);
+                                                        let pencil_rect = egui::Rect::from_min_size(
+                                                            egui::pos2(
+                                                                row_rect.right() - side - 2.0,
+                                                                row_rect.center().y - side / 2.0,
+                                                            ),
+                                                            egui::vec2(side, side),
+                                                        );
+                                                        if ui
+                                                            .put(
+                                                                pencil_rect,
+                                                                egui::Button::new("✏"),
+                                                            )
+                                                            .on_hover_text("Rename port")
+                                                            .clicked()
+                                                        {
+                                                            self.rename_op =
+                                                                Some(RenameOp::new(&selected_port));
+                                                            self.rename_open = true;
                                                         }
                                                     }
                                                 },
@@ -1819,6 +1965,106 @@ impl eframe::App for MpcApp {
                 });
             }
         });
+
+        if self.rename_open {
+            // Validation snapshot up front: the modal body below
+            // mutably borrows the op, so the port lookup (which
+            // borrows the port list) happens here.
+            let rename_validation = self.rename_op.as_ref().and_then(|op| {
+                match self.ports.iter().find(|port| port.id == op.port_id) {
+                    None => Some("Port is no longer listed.".to_owned()),
+                    Some(port) if port.r#type.as_deref() != Some("VM") => Some(format!(
+                        "Only VM ports can be renamed (this one is {:?}).",
+                        port.r#type.as_deref().unwrap_or("unknown")
+                    )),
+                    Some(_) => None,
+                }
+            });
+            egui::containers::Modal::new("rename_modal".into()).show(ui.ctx(), |ui| {
+                if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                    // A running worker keeps reporting: success still
+                    // refreshes the list, failure reopens this dialog.
+                    self.rename_open = false;
+                }
+                // Dialog actions are collected while the op is
+                // borrowed, then applied after the borrow ends.
+                let mut action = RenameAction::None;
+                {
+                    let Some(op) = self.rename_op.as_mut() else {
+                        self.rename_open = false;
+                        return;
+                    };
+                    ui.set_width(380.0);
+                    ui.heading(format!("Rename port {}", op.display_index));
+                    ui.label(format!("Current name: {}", op.current_name));
+                    if op.working() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Renaming on the switch…");
+                        });
+                        ui.small("This takes a while (slow switch TLS).");
+                    } else {
+                        let edit = egui::TextEdit::singleline(&mut op.new_name)
+                            .hint_text("New port name")
+                            .desired_width(f32::INFINITY);
+                        let edit_response = ui.add(edit);
+                        if op.focus_requested {
+                            edit_response.request_focus();
+                            op.focus_requested = false;
+                        }
+                        let name_len = op.new_name.chars().count();
+                        ui.small(format!("{name_len} / {MAX_PORT_NAME_LEN} characters"));
+                        if let Some(problem) = &rename_validation {
+                            ui.colored_label(ui.visuals().error_fg_color, problem);
+                        } else if op.new_name.is_empty() {
+                            ui.small("Enter a new name.");
+                        }
+                        if let Some(error) = op.error.clone() {
+                            ui.colored_label(ui.visuals().error_fg_color, &error);
+                        }
+                        let can_submit = rename_validation.is_none()
+                            && !op.new_name.is_empty()
+                            && op.new_name != op.current_name
+                            && name_len <= MAX_PORT_NAME_LEN;
+                        if edit_response.has_focus()
+                            && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
+                            && can_submit
+                        {
+                            action = RenameAction::Submit;
+                        }
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(can_submit, egui::Button::new("✔ Rename"))
+                                .clicked()
+                            {
+                                action = RenameAction::Submit;
+                            }
+                            if ui.button("× Cancel").clicked() {
+                                action = RenameAction::Cancel;
+                            }
+                        });
+                    }
+                }
+                match action {
+                    RenameAction::None => {}
+                    RenameAction::Submit => {
+                        let port_id = self
+                            .rename_op
+                            .as_ref()
+                            .map(|op| op.port_id.clone())
+                            .unwrap_or_default();
+                        let port = self.ports.iter().find(|port| port.id == port_id).cloned();
+                        if let Some(op) = self.rename_op.as_mut() {
+                            Self::submit_rename(&self.host, &self.user, &self.password, port, op);
+                        }
+                    }
+                    RenameAction::Cancel => {
+                        self.rename_op = None;
+                        self.rename_open = false;
+                    }
+                }
+            });
+        }
     }
 }
 

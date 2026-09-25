@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["raritan-cli", "raritan-mpc", "raritan-rdm", "raritan-rfb", "raritan-common", "raritan-session"]
+members = ["raritan-cli", "raritan-mpc", "raritan-rdm", "raritan-rfb", "raritan-common", "raritan-session", "raritan-web"]
 default-members = ["raritan-mpc"]
 
 [workspace.package]
@@ -22,12 +22,14 @@ serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
 png = "0.18"
+percent-encoding = "2"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 nucleo = "0.5"
 raritan-common = { path = "raritan-common" }
 raritan-rdm = { path = "raritan-rdm" }
 raritan-rfb = { path = "raritan-rfb" }
 raritan-session = { path = "raritan-session" }
+raritan-web = { path = "raritan-web" }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

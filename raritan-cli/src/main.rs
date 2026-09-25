@@ -1,5 +1,5 @@
 use clap::Parser;
-use raritan_rdm::RdmClient;
+use raritan_rdm::{RdmClient, rename_port};
 use raritan_session::{capture_frames, encode_ppm, find_port, is_black, video_from_client};
 use tracing::{debug, info, warn};
 
@@ -30,6 +30,13 @@ struct Args {
     /// Write the raw RDM inventory XML to this file for inspection.
     #[arg(long)]
     dump_xml: Option<String>,
+    /// Rename a port (index, id, or name substring) via the `WebUI` form.
+    /// Requires `--name`; verified live, VM/Dual-VM ports only.
+    #[arg(long)]
+    rename: Option<String>,
+    /// New port name for `--rename` (max 32 characters).
+    #[arg(long)]
+    name: Option<String>,
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -75,6 +82,16 @@ fn main() -> color_eyre::Result<()> {
             port.status,
             port.stat_available,
         );
+    }
+
+    if let Some(rename_selector) = &args.rename {
+        let new_name = args.name.as_deref().unwrap_or_else(|| {
+            eprintln!("--rename requires --name <NEW-NAME>");
+            std::process::exit(2);
+        });
+        let port = find_port(&ports, rename_selector)?;
+        rename_port(&args.host, &args.user, &args.password, port, new_name)?;
+        println!("renamed port {} to {new_name:?}", port.display_index());
     }
 
     let Some(selector) = args.video else {
