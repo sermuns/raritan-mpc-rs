@@ -566,7 +566,21 @@ impl MpcApp {
     /// Pointer commands for this frame. Button transitions always go out
     /// (falling back to the last known position so releases can't be lost);
     /// moves only when hovering and changed.
+    /// Whether a dialog owns the UI: while one is up, no key or pointer
+    /// input reaches the KVM target.
+    fn ui_obscured(&self) -> bool {
+        self.palette_open || self.paste_open || self.confirm_cad || self.rename_open
+    }
+
     fn pointer_commands(&mut self, ui: &egui::Ui) -> Vec<VideoCommand> {
+        // A dialog owns the UI: swallow pointer input so dialog clicks
+        // never reach the target. Button tracking resets; the first
+        // pointer event after the dialog closes resyncs the target.
+        if self.ui_obscured() {
+            self.mouse_buttons = 0;
+            self.wheel_remainder = 0.0;
+            return Vec::new();
+        }
         let Some(size) = self.framebuffer_size else {
             return Vec::new();
         };
@@ -592,20 +606,29 @@ impl MpcApp {
             }
             (changes, lines, input.pointer.hover_pos())
         });
-        for (bit, pressed) in &button_changes {
-            if *pressed {
-                self.mouse_buttons |= bit;
-            } else {
-                self.mouse_buttons &= !bit;
-            }
-        }
-        let buttons = self.mouse_buttons;
-        let mut commands = Vec::new();
         let mapped =
             hover.and_then(|pos| self.viewport.and_then(|rect| map_pointer(rect, size, pos)));
         let fallback = self.last_pointer.map(|(_, x, y)| (x, y)).or(Some((0, 0)));
+        let mut effective = Vec::new();
+        for (bit, pressed) in &button_changes {
+            if *pressed {
+                // Presses outside the framebuffer are ignored (clicking
+                // sidebar buttons must not ghost-click the target).
+                if mapped.is_none() {
+                    continue;
+                }
+                self.mouse_buttons |= bit;
+            } else {
+                // Releases always apply so a button pressed on-video
+                // can't stick when let go elsewhere.
+                self.mouse_buttons &= !bit;
+            }
+            effective.push((*bit, *pressed));
+        }
+        let buttons = self.mouse_buttons;
+        let mut commands = Vec::new();
         // Plain moves only go out when the position actually changed.
-        let target: Option<(u16, u16)> = if button_changes.is_empty() {
+        let target: Option<(u16, u16)> = if effective.is_empty() {
             mapped.filter(|&(x, y)| self.last_pointer != Some((buttons, x, y)))
         } else {
             mapped.or(fallback)
@@ -620,7 +643,9 @@ impl MpcApp {
             self.last_pointer = Some((buttons, x, y));
         }
         // Java counts wheel-up as negative rotation; egui reports +y.
-        self.wheel_remainder += wheel_lines;
+        // Scrolling outside the framebuffer (e.g. the port list) must
+        // not scroll the target.
+        self.wheel_remainder += if mapped.is_some() { wheel_lines } else { 0.0 };
         let mut steps = self.wheel_remainder.trunc() as i32;
         if steps != 0 {
             self.wheel_remainder -= steps as f32;
@@ -1495,9 +1520,12 @@ impl eframe::App for MpcApp {
         }
 
         // Forward key presses to the target while a session runs (text events
-        // ignored: the press/release pair suffices; pointer events share the channel).
-        // Suppressed while command palette is open so typing filters instead of reaching the KVM.
-        if !self.palette_open
+        // ignored: the press/release pair suffices).
+        // Suppressed while a dialog owns the UI or a text field holds
+        // focus, so typing into a dialog or sidebar field never reaches
+        // the target.
+        if !self.ui_obscured()
+            && !ui.ctx().egui_wants_keyboard_input()
             && let Some(tx) = self.cmd_tx.clone()
         {
             ui.ctx().input(|input| {
@@ -1513,6 +1541,8 @@ impl eframe::App for MpcApp {
                     }
                 }
             });
+        }
+        if let Some(tx) = self.cmd_tx.clone() {
             for cmd in self.pointer_commands(ui) {
                 let _ = tx.send(cmd);
             }
