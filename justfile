@@ -29,3 +29,10 @@ push:
 
 watch:
     watchexec --exts rs --restart -- cargo run
+
+check:
+    cargo fmt --check
+    cargo build --workspace --all-targets
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace
+    cargo deny check advisories bans sources
