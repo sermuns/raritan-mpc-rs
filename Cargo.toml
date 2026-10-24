@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["raritan-cli", "raritan-mpc", "raritan-rdm", "raritan-rfb", "raritan-common", "raritan-session", "raritan-web"]
+members = ["raritan-cli", "raritan-common", "raritan-mpc", "raritan-rdm", "raritan-rfb", "raritan-session", "raritan-web"]
 default-members = ["raritan-mpc"]
 
 [workspace.package]
@@ -10,37 +10,78 @@ license = "WTFPL"
 publish = false
 
 [workspace.dependencies]
-eyre = "0.6"
-openssl = "0.10"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 base64 = "0.23"
-flate2 = "1"
-rc4 = "0.2"
-quick-xml = { version = "0.42", features = ["serialize"] }
-serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
-png = "0.18"
-percent-encoding = "2"
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
+eyre = "0.6"
+flate2 = "1"
 nucleo = "0.5"
+openssl = "0.10"
+percent-encoding = "2"
+png = "0.18"
+quick-xml = { version = "0.42", features = ["serialize"] }
 raritan-common = { path = "raritan-common" }
 raritan-rdm = { path = "raritan-rdm" }
 raritan-rfb = { path = "raritan-rfb" }
 raritan-session = { path = "raritan-session" }
 raritan-web = { path = "raritan-web" }
+rc4 = "0.2"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [workspace.lints.clippy]
+# Hand-picked from `restriction` and `cargo`, which are too blunt to enable whole.
+# `#[expect]` records why a lint is silenced; `#[allow]` does not.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+# Scaffolding that must not reach a commit; `exit` also skips every `Drop`.
+dbg_macro = "warn"
+exit = "warn"
+# The bake and the wire are little-endian by definition.
+host_endian_bytes = "warn"
+# A float literal that rounds on the way in is a typo.
+lossy_float_literal = "warn"
+mem_forget = "warn"
+multiple_unsafe_ops_per_block = "warn"
+# Manifest hygiene; `cargo-deny` owns `multiple_crate_versions`.
+negative_feature_names = "warn"
+nursery = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+redundant_feature_names = "warn"
+# Tests go in `mod tests`, not beside the code they exercise.
+tests_outside_test_module = "warn"
+todo = "warn"
+# Guards any future `unsafe`; there is none today.
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+wildcard_dependencies = "warn"
+
+assert_is_empty = "allow"
+# Wire parsing with explicit length/range checks; `try_into` everywhere would
+# drown the protocol logic for no added safety.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+default_trait_access = "allow"
+# `const fn` on every getter and helper would spread `const` through the API
+# for no measured gain; make things `const` when a caller needs it.
+missing_const_for_fn = "allow"
 # Boilerplate for eyre-style error handling: every fallible helper returns
 # `eyre::Result`, so per-function `# Errors` sections would add no information.
 missing_errors_doc = "allow"
 # Trivial getters/converters in workspace-internal crates.
 must_use_candidate = "allow"
-# Wire parsing with explicit length/range checks; `try_into` everywhere would
-# drown the protocol logic for no added safety.
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-cast_precision_loss = "allow"
 uninlined_format_args = "allow"
+
+[workspace.lints.rust]
+elided_lifetimes_in_paths = "warn"
+# A `$name` typo in a macro yields a silent no-op.
+meta_variable_misuse = "warn"
+# `pub` that no path outside the crate reaches is dead weight in rustdoc.
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.rustdoc]
+all = { level = "warn", priority = -1 }
