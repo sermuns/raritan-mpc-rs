@@ -2,7 +2,7 @@ use eyre::Result;
 use quick_xml::de::from_str;
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub struct Port {
     #[serde(rename = "@id")]
@@ -68,15 +68,15 @@ struct PortDocument {
     #[serde(default)]
     port: Vec<Port>,
     #[serde(default)]
-    device: Vec<PortDocument>,
+    device: Vec<Self>,
     #[serde(default)]
-    get: Vec<PortDocument>,
+    get: Vec<Self>,
     #[serde(default)]
-    data: Vec<PortDocument>,
+    data: Vec<Self>,
     #[serde(default)]
-    database: Vec<PortDocument>,
+    database: Vec<Self>,
     #[serde(default)]
-    response: Vec<PortDocument>,
+    response: Vec<Self>,
 }
 
 impl PortDocument {
@@ -98,7 +98,7 @@ impl PortDocument {
 
 /// Switch identity from `<CSC_Info>`. All fields optional: firmware varies,
 /// and a missing field must never break the connection.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub struct SwitchInfo {
     #[serde(rename = "@Type", default)]
@@ -126,9 +126,7 @@ struct CscInfo {
 
 /// Parses `<CSC_Info>`; unparseable payloads yield an empty struct, never an error.
 pub(crate) fn parse_switch_info(xml: &str) -> SwitchInfo {
-    from_str::<CscInfo>(xml)
-        .map(|info| info.device.unwrap_or_default())
-        .unwrap_or_default()
+    from_str::<CscInfo>(xml).map_or_default(|info| info.device.unwrap_or_default())
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,7 +137,10 @@ pub(crate) struct SessionResponse {
 
 #[derive(Debug, Deserialize)]
 // Field names follow the XML (`SessionID` vs `SessionID` element).
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "fields mirror the XML attribute/element names verbatim"
+)]
 pub(crate) struct SessionData {
     #[serde(rename = "@SessionID", default)]
     pub session_id: Option<String>,

@@ -25,6 +25,7 @@ pub struct ConnectionConfig {
 }
 
 /// Finds a port by index, id, id suffix, exact name, or name substring.
+///
 /// Precedence: exact index → id → name → id suffix → name substring.
 /// Empty selectors are rejected (they'd match everything).
 /// The index is the 1-indexed number shown in the UI (`@index + 1`);
@@ -145,8 +146,10 @@ pub fn establish_video(
 }
 
 /// Like [`establish_video`] but reuses an existing [`RdmClient`] (e.g. one
-/// that already enumerated ports). Saves one full TLS 1.0 handshake (~2 s
-/// on the switch, which serialises handshakes) compared to `establish_video`.
+/// that already enumerated ports).
+///
+/// Saves one full TLS 1.0 handshake (~2 s on the switch, which serialises
+/// handshakes) compared to `establish_video`.
 pub fn video_from_client(
     mut rdm: RdmClient,
     port_id: &str,
@@ -172,7 +175,7 @@ pub fn capture_frames(
 ) -> eyre::Result<(Framebuffer, std::collections::HashSet<i32>, usize)> {
     // Bound headless captures: a stalled target would otherwise block forever.
     let previous_timeout = rfb.inner_read_timeout().unwrap_or(None);
-    rfb.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    rfb.set_read_timeout(Some(Duration::from_secs(10)))?;
     let result = capture_frames_inner(rfb, n);
     let _ = rfb.set_read_timeout(previous_timeout);
     result
@@ -190,7 +193,7 @@ fn capture_frames_inner(
     let mut seen_encodings = std::collections::HashSet::new();
     let mut total_rects = 0usize;
     let mut updates = 0usize;
-    let waiting = std::time::Instant::now();
+    let waiting = Instant::now();
     while updates < n {
         let update = rfb.read_message()?;
         if update.rectangles.is_empty() {

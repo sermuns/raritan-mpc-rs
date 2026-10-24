@@ -1,9 +1,11 @@
 //! Long-lived RDM control connection, like the Java client's single
-//! `TRConnection`: one login per program run, credentials fetched once, a
-//! keepalive query when idle. Port enumeration and video credentials are
-//! requests served over a channel, so nothing else ever logs in. (Each
-//! extra login is a TLS 1.0 handshake the switch serialises, and its
-//! logout is a session reap right next to the live video session.)
+//! `TRConnection`.
+//!
+//! One login per program run, credentials fetched once, a keepalive query
+//! when idle. Port enumeration and video credentials are requests served
+//! over a channel, so nothing else ever logs in. (Each extra login is a
+//! TLS 1.0 handshake the switch serialises, and its logout is a session
+//! reap right next to the live video session.)
 
 use crate::ConnectionConfig;
 use raritan_common::SessionCreds;

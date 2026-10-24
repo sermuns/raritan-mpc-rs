@@ -1,6 +1,8 @@
-//! Legacy binary TR layer (diagnostics only): the RFB path bypasses the
-//! video-stream grant (cmd 55, never answered). `probe_ping` checks the TR
-//! layer is alive; `request_video_grant` sends the byte-identical Java request.
+//! Legacy binary TR layer (diagnostics only).
+//!
+//! The RFB path bypasses the video-stream grant (cmd 55, never answered).
+//! `probe_ping` checks the TR layer is alive; `request_video_grant` sends the
+//! byte-identical Java request.
 
 use eyre::{Context, OptionExt, bail};
 use openssl::ssl::SslStream;

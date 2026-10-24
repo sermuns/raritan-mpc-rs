@@ -149,7 +149,10 @@ fn main() -> eframe::Result {
 
 // Flat egui state: grouping the flags into sub-structs would add
 // indirection at every use site for no gain.
-#[expect(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flat window state; grouping the flags would add indirection for no gain"
+)]
 struct MpcApp {
     /// Switch address (sidebar-editable, persisted).
     host: String,
@@ -233,8 +236,8 @@ enum SortOrder {
 impl SortOrder {
     fn label(self) -> &'static str {
         match self {
-            SortOrder::PortNumber => "Port number",
-            SortOrder::Name => "Name",
+            Self::PortNumber => "Port number",
+            Self::Name => "Name",
         }
     }
 }
@@ -671,7 +674,7 @@ fn run_video_session(
     port_id: &str,
     worker: &WorkerFlags,
     sender: &mpsc::SyncSender<FrameMessage>,
-    cmd_receiver: &mpsc::Receiver<VideoCommand>,
+    cmd_receiver: &Receiver<VideoCommand>,
 ) -> eyre::Result<()> {
     worker.connecting.store(true, Ordering::Relaxed);
     let result = (|| -> eyre::Result<()> {
@@ -727,7 +730,7 @@ fn run_video_session(
 /// Exits when a channel closes or the stream errors.
 fn run_pump(
     rfb: &mut raritan_rfb::RfbStream<std::net::TcpStream>,
-    cmd_receiver: &mpsc::Receiver<VideoCommand>,
+    cmd_receiver: &Receiver<VideoCommand>,
     sender: &mpsc::SyncSender<FrameMessage>,
     framebuffer: &mut Framebuffer,
     format: PixelFormat,
@@ -1032,10 +1035,10 @@ impl MpcApp {
         for idx in self.port_order() {
             if let Some(port) = self.ports.get(idx) {
                 let name = port.name.as_deref().unwrap_or(&port.id);
-                let label = match port.index {
-                    Some(v) => format!("🔌 Connect to port {} - {name}", v.saturating_add(1)),
-                    None => format!("🔌 Connect to port ? - {name}"),
-                };
+                let number = port
+                    .index
+                    .map_or_else(|| "?".to_owned(), |v| v.saturating_add(1).to_string());
+                let label = format!("🔌 Connect to port {number} - {name}");
                 items.push((label, PaletteAction::ConnectPort(idx)));
             }
         }
@@ -1252,7 +1255,7 @@ fn java_key(key: egui::Key) -> Option<(i32, i32)> {
 
 /// Window icon from the embedded `media/icon-128.png` (`None` keeps the
 /// toolkit default; a broken asset must never block startup).
-fn load_app_icon() -> Option<std::sync::Arc<egui::IconData>> {
+fn load_app_icon() -> Option<Arc<egui::IconData>> {
     let mut reader = png::Decoder::new(std::io::Cursor::new(include_bytes!(
         "../../media/icon-128.png"
     )))
@@ -1272,7 +1275,7 @@ fn load_app_icon() -> Option<std::sync::Arc<egui::IconData>> {
         }
         _ => return None,
     };
-    Some(std::sync::Arc::new(egui::IconData {
+    Some(Arc::new(egui::IconData {
         rgba,
         width: info.width,
         height: info.height,
@@ -1282,16 +1285,14 @@ fn load_app_icon() -> Option<std::sync::Arc<egui::IconData>> {
 /// Short git sha for the version stamp (via `build.rs`); `"unknown"`
 /// outside git, `*` marking a dirty tree.
 fn short_sha() -> String {
-    match option_env!("VERGEN_GIT_SHA") {
-        Some(sha) => {
-            let short: String = sha.chars().take(7).collect();
-            if option_env!("VERGEN_GIT_DIRTY") == Some("true") {
-                format!("{short}*")
-            } else {
-                short
-            }
-        }
-        None => "unknown".to_owned(),
+    let Some(sha) = option_env!("VERGEN_GIT_SHA") else {
+        return "unknown".to_owned();
+    };
+    let short: String = sha.chars().take(7).collect();
+    if option_env!("VERGEN_GIT_DIRTY") == Some("true") {
+        format!("{short}*")
+    } else {
+        short
     }
 }
 
@@ -1331,7 +1332,10 @@ impl eframe::App for MpcApp {
     }
 
     // Single `ui()` owns the whole frame: sidebar, top bar, and video area.
-    #[expect(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one frame pass: sidebar, top bar, and video area in draw order"
+    )]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Command palette shortcut: F1 or Ctrl+P — fuzzy search actions/ports
         let palette_toggle = ui.ctx().input(|i| {
@@ -1398,8 +1402,7 @@ impl eframe::App for MpcApp {
                 ui.ctx().request_repaint();
             }
         }
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(33));
+        ui.ctx().request_repaint_after(Duration::from_millis(33));
 
         // Command palette overlay — fuzzy search actions/ports via `nucleo-matcher`
         if self.palette_open {
@@ -1409,7 +1412,7 @@ impl eframe::App for MpcApp {
             let mut should_execute: Option<usize> = None;
             // We need filtered for rendering, but query may change inside modal.
             // Recompute inside modal after editing palette_query directly to avoid one-frame lag.
-            egui::containers::Modal::new("palette_modal".into()).show(ui.ctx(), |ui| {
+            egui::Modal::new(egui::Id::unique("palette_modal")).show(ui.ctx(), |ui| {
                 if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                     should_close = true;
                 }
@@ -1903,7 +1906,7 @@ impl eframe::App for MpcApp {
                 ui.separator();
                 // Confirm the Secure Attention Sequence before sending.
                 if self.confirm_cad {
-                    egui::containers::Modal::new("cad_confirm".into()).show(ui.ctx(), |ui| {
+                    egui::Modal::new(egui::Id::unique("cad_confirm")).show(ui.ctx(), |ui| {
                         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                             self.confirm_cad = false;
                         }
@@ -1925,7 +1928,7 @@ impl eframe::App for MpcApp {
                     });
                 }
                 if self.paste_open {
-                    egui::containers::Modal::new("paste_modal".into()).show(ui.ctx(), |ui| {
+                    egui::Modal::new(egui::Id::unique("paste_modal")).show(ui.ctx(), |ui| {
                         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                             self.paste_open = false;
                         }
@@ -2010,7 +2013,7 @@ impl eframe::App for MpcApp {
                     Some(_) => None,
                 }
             });
-            egui::containers::Modal::new("rename_modal".into()).show(ui.ctx(), |ui| {
+            egui::Modal::new(egui::Id::unique("rename_modal")).show(ui.ctx(), |ui| {
                 if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                     // A running worker keeps reporting: success still
                     // refreshes the list, failure reopens this dialog.
@@ -2081,8 +2084,7 @@ impl eframe::App for MpcApp {
                         let port_id = self
                             .rename_op
                             .as_ref()
-                            .map(|op| op.port_id.clone())
-                            .unwrap_or_default();
+                            .map_or_default(|op| op.port_id.clone());
                         let port = self.ports.iter().find(|port| port.id == port_id).cloned();
                         if let Some(op) = self.rename_op.as_mut() {
                             Self::submit_rename(&self.host, &self.user, &self.password, port, op);
@@ -2115,7 +2117,7 @@ mod tests {
         strings: std::collections::HashMap<String, String>,
     }
 
-    impl eframe::Storage for MemStorage {
+    impl Storage for MemStorage {
         fn get_string(&self, key: &str) -> Option<String> {
             self.strings.get(key).cloned()
         }

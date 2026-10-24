@@ -101,7 +101,7 @@ impl RdmClient {
     }
 
     pub fn database_query(&mut self, request: &str) -> eyre::Result<String> {
-        raritan_common::write_frame(&mut self.stream, request)?;
+        write_frame(&mut self.stream, request)?;
         let response = read_frame(&mut self.stream)?;
         Ok(String::from_utf8(response)?
             .trim_end_matches('\0')
@@ -239,13 +239,15 @@ fn csc_start_session<S: Read + Write>(
     if !info.starts_with(b"<CSC_Info") {
         bail!("unexpected CSC info: {}", display_xml(&info));
     }
-    let start = match session_id {
-        Some(id) => format!(
-            r#"<CSC_Start_Session ProtocolID="{protocol}" SessionID="{}"/>"#,
-            escape_xml(id)
-        ),
-        None => format!(r#"<CSC_Start_Session ProtocolID="{protocol}"/>"#),
-    };
+    let start = session_id.map_or_else(
+        || format!(r#"<CSC_Start_Session ProtocolID="{protocol}"/>"#),
+        |id| {
+            format!(
+                r#"<CSC_Start_Session ProtocolID="{protocol}" SessionID="{}"/>"#,
+                escape_xml(id)
+            )
+        },
+    );
     write_frame(stream, &start).wrap_err("writing CSC start-session")?;
     debug!(protocol, "CSC start-session sent");
     Ok(info)

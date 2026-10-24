@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 pub struct RfbStream<S> {
     pub(crate) stream: S,
     pub(crate) framebuffer_size: Option<(u16, u16)>,
-    pub(crate) pending_updates: VecDeque<framebuffer::FramebufferUpdate>,
+    pub(crate) pending_updates: VecDeque<FramebufferUpdate>,
 }
 
 pub use framebuffer::{Framebuffer, FramebufferRectangle, FramebufferUpdate, PixelFormat};
@@ -54,7 +54,10 @@ mod tests {
     /// skipped, with the next update still parsing.
     // `assert!(.is_empty())` reads better here than the lint's
     // `assert_eq!(.., [] as [..; 0])` suggestion.
-    #[expect(clippy::assert_is_empty)]
+    #[expect(
+        clippy::assert_is_empty,
+        reason = "`assert!(..is_empty())` reads better than the suggested slice comparison"
+    )]
     #[test]
     fn pump_survives_colour_map() {
         let mut server = vec![1, 0]; // type 1 + pad
@@ -232,7 +235,7 @@ mod tests {
 
         let mut split = RfbStream::new(FakeStream::new(server));
         let header = match split.poll_incoming().unwrap() {
-            crate::pump::Incoming::Live(header) => header,
+            Incoming::Live(header) => header,
             other => panic!("expected live header, got {other:?}"),
         };
         assert_eq!((header.flags, header.count, header.size), (0, 1, 20));
