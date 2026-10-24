@@ -54,17 +54,6 @@ fn grey_color(grey_depth: usize, idx: usize) -> Option<u32> {
     Some(0xff00_0000 | channel << 16 | channel << 8 | channel)
 }
 
-#[expect(
-    dead_code,
-    reason = "readable whole-table form of the Java palette expansion; hot path uses `grey_color`"
-)]
-// Keep helper for tests that still want a Vec, but hot path uses `grey_color`.
-fn lrle_greys(grey_depth: usize) -> Vec<u32> {
-    (0..1usize << grey_depth)
-        .filter_map(|idx| grey_color(grey_depth, idx))
-        .collect()
-}
-
 const COLORS_4: [u32; 16] = [
     0xff00_0000,
     0xff7f_0000,
@@ -118,25 +107,6 @@ fn lrle_color(conf: &LrleConfig, idx: usize) -> Option<u32> {
         }
         4 => COLORS_4.get(idx).copied(),
         _ => None,
-    }
-}
-
-#[expect(
-    dead_code,
-    reason = "readable whole-table form of the Java palette expansion; hot path uses `lrle_color`"
-)]
-fn lrle_colors(conf: &LrleConfig) -> Vec<u32> {
-    // Retained for tests / non-hot paths; hot path uses `lrle_color` without alloc.
-    if conf.grey {
-        return lrle_greys(conf.grey_depth);
-    }
-    match conf.depth {
-        15 => (0..1usize << 15)
-            .filter_map(|idx| lrle_color(conf, idx))
-            .collect(),
-        7 => (0..128).filter_map(|idx| lrle_color(conf, idx)).collect(),
-        4 => COLORS_4.to_vec(),
-        _ => vec![0xff00_0000],
     }
 }
 
